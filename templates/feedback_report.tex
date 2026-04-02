@@ -1,0 +1,251 @@
+% LaTA Grading System - Automated grading workflow using open-source LLMs.
+% Copyright (C) 2026 Jesse A. Rodriguez
+%
+% This program is free software: you can redistribute it and/or modify
+% it under the terms of the GNU Affero General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+%
+% This program is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+% GNU Affero General Public License for more details.
+%
+% You should have received a copy of the GNU Affero General Public License
+% along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{colortbl}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\geometry{a4paper, margin=1in}
+
+% Colors
+\definecolor{ta_gray}{gray}{0.95}
+\definecolor{hint_bg}{RGB}{245, 247, 250}
+\definecolor{hint_border}{RGB}{200, 200, 220}
+\definecolor{late_red}{RGB}{220, 53, 69}
+\definecolor{late_bg}{RGB}{255, 243, 245}
+\definecolor{extra_credit_green}{RGB}{40, 167, 69}
+
+\title{Feedback Report: \VAR{student_id | latex_escape}}
+\date{\today}
+\author{LaTA Evaluation System}
+
+\begin{document}
+
+\maketitle
+
+% --- LATE PENALTY WARNING (if applicable) ---
+\BLOCK{if late_penalty and late_penalty.is_late}
+\begin{center}
+\fcolorbox{late_red}{late_bg}{
+    \parbox{0.90\linewidth}{
+        \vspace{0.5em}
+        \centering
+        \textcolor{late_red}{\textbf{\Large LATE SUBMISSION PENALTY}}
+
+        \vspace{0.3em}
+        \hrule
+        \vspace{0.3em}
+
+        \begin{tabular}{rl}
+        \textbf{Days Late:} & \VAR{late_penalty.days_late} day(s) \\
+        \textbf{Penalty Rate:} & \VAR{late_penalty.penalty_percentage * 100}\% (\VAR{late_penalty.penalty_percentage * 100 / late_penalty.days_late}\% per day) \\
+        \textbf{Points Before Penalty:} & \VAR{total_score} \\
+        \textbf{Points Deducted:} & -\VAR{late_penalty.points_deducted} \\
+        \hline
+        \textbf{Final Score:} & \textbf{\VAR{late_penalty.final_score}} \\
+        \end{tabular}
+
+        \vspace{0.3em}
+        \small{\textit{Note: The grading feedback below reflects your earned score before the late penalty.}}
+        \vspace{0.3em}
+    }
+}
+\end{center}
+
+\vspace{1em}
+\BLOCK{endif}
+
+% --- SEGMENTATION WARNING (if applicable) ---
+\BLOCK{if segmentation_warning}
+\begin{center}
+\fcolorbox{late_red}{late_bg}{
+    \parbox{0.90\linewidth}{
+        \vspace{0.3em}
+        \centering
+        \textcolor{late_red}{\textbf{LaTeX SUBMISSION FORMAT WARNING}}
+
+        \vspace{0.2em}
+        \small{The automated grading system had difficulty processing your .tex file structure. This may affect grading accuracy. Please ensure: (1) Do not alter \textbackslash Prob\{\} markers, (2) Verify the .tex file you submit actually compiles to your submitted PDF.}
+        \vspace{0.3em}
+    }
+}
+\end{center}
+
+\vspace{0.5em}
+\BLOCK{endif}
+
+% --- SECTION 1: GRADES SUMMARY ---
+\section*{Grading Summary}
+\begin{center}
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{|p{0.45\textwidth}|c|c|c|c|}
+\hline
+\rowcolor{ta_gray} \textbf{Problem / Section} & \textbf{Score} & \textbf{Max} & \textbf{Extra} & \textbf{Deducted} \\
+\hline
+\BLOCK{for group in summary_table}
+\VAR{group.name | latex_escape} & \textbf{\VAR{group.total_displayed_score}} & \VAR{group.max} & \BLOCK{if group.extra_credit_earned > 0}\textcolor{extra_credit_green}{+\VAR{group.extra_credit_earned}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{-\VAR{group.deducted}} \\
+\hline
+\BLOCK{endfor}
+\hline
+\rowcolor{ta_gray} \textbf{TOTAL} & \textbf{\VAR{total_score}} & \VAR{max_total} & \BLOCK{if total_extra_credit > 0}\textcolor{extra_credit_green}{\textbf{+\VAR{total_extra_credit}}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{\textbf{-\VAR{total_deducted}}} \\
+\hline
+\end{tabular}
+\end{center}
+
+% --- ZERO-SCORED ITEMS BOX (corrections mode only) ---
+\BLOCK{if zero_scored_items}
+\vspace{1em}
+\begin{center}
+\fcolorbox{late_red}{late_bg}{
+    \parbox{0.90\linewidth}{
+        \vspace{0.5em}
+        \centering
+        \textcolor{late_red}{\textbf{\Large ZERO-SCORED ITEMS (NO RECOVERY)}}
+
+        \vspace{0.3em}
+        \hrule
+        \vspace{0.3em}
+
+        The following rubric items received \textbf{0 points} in your original submission.
+        Per course policy, these items \textbf{cannot recover points} in corrections:
+
+        \vspace{0.3em}
+        \begin{itemize}[leftmargin=2em]
+        \BLOCK{for item in zero_scored_items}
+            \item \textbf{Problem \VAR{item[0]}\BLOCK{if item|length > 1} (\VAR{item[1:]})\BLOCK{endif}}
+        \BLOCK{endfor}
+        \end{itemize}
+
+        \vspace{0.3em}
+        You may still receive feedback on corrections to these items, but your score will remain 0 for these criteria.
+        \vspace{0.5em}
+    }
+}
+\end{center}
+\BLOCK{endif}
+
+\pagebreak
+
+% --- SECTION 2: INSTRUCTOR COMMENTS ---
+\section*{Instructor Comments}
+\textit{\VAR{general_comments | latex_escape}}
+
+% --- SECTION 3: DETAILED FEEDBACK (NARRATIVE) ---
+\section*{Detailed Feedback \& Hints}
+\textit{Note: Problems where you received full credit are not listed below.}
+
+\vspace{0.5cm}
+
+\BLOCK{for section_title, data in grouped_data.items()}
+    % Show this section if regular (non-EC) points were lost
+    \BLOCK{if data.score < data.max}
+        \subsection*{\VAR{section_title | latex_escape} Incorrect Rubric Items \hfill Score: [\VAR{data.score}/\VAR{data.max}]}
+
+        \begin{itemize}[leftmargin=*]
+        \BLOCK{for item in data.grade_items}
+            % Only show non-extra-credit items that lost points
+            \BLOCK{if item.score < item.max_score and not item.is_extra_credit}
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{item.max_score - item.score} pts})
+                
+                \vspace{0.3em}
+                % The Hint Box
+                \fcolorbox{hint_border}{hint_bg}{
+                    \parbox{0.90\linewidth}{
+                        \vspace{0.3em}
+                        \textit{Hint:} \VAR{item.student_hint | latex_escape}
+                        \vspace{0.3em}
+                    }
+                }
+                \vspace{0.5em}
+            \BLOCK{endif}
+        \BLOCK{endfor}
+        \end{itemize}
+    \BLOCK{endif}
+
+    % Show extra credit section if there are any extra credit items (and not in corrections mode for missed items)
+    \BLOCK{if data.extra_credit_items|length > 0 and not is_corrections_mode}
+        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{data.extra_credit_earned} pts}}
+
+        \begin{itemize}[leftmargin=*]
+        \BLOCK{for item in data.extra_credit_items}
+            \BLOCK{if item.score > 0}
+                % Earned extra credit
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{item.score} pts})
+
+                \vspace{0.3em}
+                \fcolorbox{hint_border}{hint_bg}{
+                    \parbox{0.90\linewidth}{
+                        \vspace{0.3em}
+                        \textit{Feedback:} \VAR{item.student_hint | latex_escape}
+                        \vspace{0.3em}
+                    }
+                }
+                \vspace{0.5em}
+            \BLOCK{else}
+                % Missed extra credit
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{item.max_score} pts})
+
+                \vspace{0.3em}
+                \fcolorbox{hint_border}{hint_bg}{
+                    \parbox{0.90\linewidth}{
+                        \vspace{0.3em}
+                        \textit{Hint:} \VAR{item.student_hint | latex_escape}
+                        \vspace{0.3em}
+                    }
+                }
+                \vspace{0.5em}
+            \BLOCK{endif}
+        \BLOCK{endfor}
+        \end{itemize}
+    \BLOCK{elif data.extra_credit_earned > 0 and is_corrections_mode}
+        % In corrections mode, only show earned extra credit (preserved from original)
+        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{data.extra_credit_earned} pts}}
+
+        \begin{itemize}[leftmargin=*]
+        \BLOCK{for item in data.extra_credit_items}
+            \BLOCK{if item.score > 0}
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{item.score} pts})
+
+                \vspace{0.3em}
+                \fcolorbox{hint_border}{hint_bg}{
+                    \parbox{0.90\linewidth}{
+                        \vspace{0.3em}
+                        \textit{Feedback:} \VAR{item.student_hint | latex_escape}
+                        \vspace{0.3em}
+                    }
+                }
+                \vspace{0.5em}
+            \BLOCK{endif}
+        \BLOCK{endfor}
+        \end{itemize}
+    \BLOCK{endif}
+
+    \BLOCK{if data.score < data.max or data.extra_credit_items|length > 0}
+        \vspace{0.3em}
+        \hrule
+    \BLOCK{endif}
+\BLOCK{endfor}
+
+\vfill
+\footnotesize{Generated by LaTA, mistakes may be present, particularly in the provided hints. Please consult the official solutions or your instructor if you have any questions.}
+
+\end{document}

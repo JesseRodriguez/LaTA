@@ -1,0 +1,149 @@
+# Example Rubric Template for LaTA
+#
+# This file demonstrates how to structure a grading rubric.
+# Top-level keys must match the section headers in your LaTeX solution file.
+#
+# Structure:
+#   "Problem Label":
+#     - title: "Display name for this section"
+#       items:
+#         - name: "Criterion name (appears in student feedback)"
+#           points: N  # Integer point value
+#           description: "Question to guide the LLM grader"
+#
+# Tips:
+#   - Use descriptive criterion names (students will see these)
+#   - Write descriptions as questions ("Did the student...?")
+#   - Use "REJECT" keyword to enforce strict requirements
+#   - Include "good faith attempt" items for partial credit
+#   - Binary grading: students get full points or zero per item
+
+"Problem 1":
+  - title: "Problem 1 (a)"
+    items:
+      - name: "Correct formula/equation"
+        points: 3
+        description: "Did the student identify and apply the correct governing equation or formula for this problem?"
+
+      - name: "Proper setup and substitution"
+        points: 2
+        description: "Did the student correctly set up the problem with appropriate boundary conditions and substitute known values?"
+
+      - name: "Numerical answer accuracy"
+        points: 1.5
+        description: "Is the student's final numerical answer within 5% of the reference solution?"
+
+      - name: "Units and presentation"
+        points: 0.5
+        description: "Did the student include correct units and present their answer clearly?"
+
+      - name: "Good faith attempt"
+        points: 2
+        description: "Did the student make a reasonable attempt beyond just writing down the problem statement? Be lenient with this criterion."
+
+  - title: "Problem 1 (b)"
+    items:
+      - name: "Identified correct physical principle"
+        points: 3
+        description: "Did the student correctly identify the relevant physical law or principle (e.g., conservation of energy, Newton's second law)?"
+
+      - name: "Mathematical derivation"
+        points: 4
+        description: "Did the student show clear mathematical steps leading from the governing equation to the final form? REJECT purely qualitative arguments without equations."
+
+      - name: "Correct final answer"
+        points: 3
+        description: "Is the final answer correct within 5% of the reference solution?"
+
+"Problem 2":
+  - title: "Problem 2 (a)"
+    items:
+      - name: "Diagram or schematic"
+        points: 2
+        description: "Did the student provide a clear diagram showing relevant forces, vectors, or system components?"
+
+      - name: "Equation formulation"
+        points: 3
+        description: "Did the student write down the correct equation(s) relating the quantities in the problem?"
+
+      - name: "Solution methodology"
+        points: 3
+        description: "Did the student use an appropriate method to solve the equation(s)?"
+
+      - name: "Final answer"
+        points: 2
+        description: "Is the final answer correct and properly labeled with units?"
+
+  - title: "Problem 2 (b)"
+    items:
+      - name: "Conceptual understanding"
+        points: 3
+        description: "Did the student demonstrate understanding of the underlying concept through explanation or reasoning? REJECT answers with no justification."
+
+      - name: "Quantitative analysis"
+        points: 4
+        description: "Did the student provide quantitative support (calculations, estimates, comparisons) for their answer?"
+
+      - name: "Correct conclusion"
+        points: 3
+        description: "Did the student reach the correct conclusion or answer to the question posed?"
+
+"Problem 3":
+  - title: "Problem 3"
+    items:
+      - name: "Problem decomposition"
+        points: 3
+        description: "Did the student break down the complex problem into manageable sub-problems or steps?"
+
+      - name: "Use of approximations"
+        points: 2
+        description: "If approximations were needed, did the student identify and justify them appropriately?"
+
+      - name: "Intermediate results"
+        points: 3
+        description: "Are the intermediate calculations or results reasonable and correct?"
+
+      - name: "Final answer and interpretation"
+        points: 4
+        description: "Is the final answer correct and does the student provide physical interpretation or check for reasonableness?"
+
+      - name: "Good faith attempt"
+        points: 3
+        description: "Did the student make a serious attempt at solving this problem? Be lenient."
+
+      # EXTRA CREDIT EXAMPLE
+      - name: "Advanced computational analysis"
+        points: 2
+        is_extra_credit: true
+        description: "Did the student provide additional computational efficiency analysis or optimization beyond the basic requirements?"
+
+# Additional Notes:
+#
+# Special Keywords in Descriptions:
+#   - "REJECT" - Forces strict checking (e.g., "REJECT any answer without a free body diagram")
+#   - "within X%" - Guides numerical tolerance checking
+#   - "Be lenient" - Signals this is a partial credit / attempt item
+#
+# Point Values:
+#   - Points can be integers (1, 2, 3) or decimals (0.5, 1.5, 2.5)
+#   - Use decimals for fine-grained grading (e.g., 0.5 pts for units, 1.5 pts for calculations)
+#   - Total points per problem should still be reasonable (avoid 0.1 or 0.25 increments)
+#   - The LLM will award either FULL points or ZERO points per item (binary grading)
+#
+# Point Allocation Strategy:
+#   - Approach/Method: 30-40% of points
+#   - Execution/Math: 30-40% of points
+#   - Final Answer: 20-30% of points
+#   - Attempt: 10-20% of points (optional)
+#
+# Extra Credit:
+#   - Use is_extra_credit: true to mark items as extra credit
+#   - Extra credit adds to earned score but NOT to maximum possible score
+#   - Example: 50-point assignment + 5 extra credit earned = "55/50"
+#   - Recommended: 2-5 points per extra credit item, 5-10% of base assignment
+#
+# Common Pitfalls to Avoid:
+#   - Don't make criteria too broad ("Did the student solve correctly?")
+#   - Don't ask multiple questions in one item (split them up)
+#   - Don't forget to include attempt items (helps with morale)
+#   - Don't use vague language (be specific about what you're looking for)

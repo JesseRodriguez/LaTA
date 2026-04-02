@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.pyc
+
+# Mac
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# LaTA Data - Protect Student Privacy!
+# We keep directory structure via .gitkeep files but ignore actual data
+
+# Configuration (contains sensitive paths and settings)
+/config.yaml
+
+# Input data (student submissions from Gradescope)
+data/input/*
+!data/input/.gitkeep
+
+# Output data (generated PDFs, logs, debug files - all in assignment-specific folders)
+data/output/*
+!data/output/.gitkeep
+
+# Debug data (LLM prompts and responses)
+data/debug/*
+!data/debug/.gitkeep
+
+# Solutions (your answer keys)
+data/solutions/*
+!data/solutions/.gitkeep
+
+# Rubrics (keep example, ignore actual rubrics)
+data/rubrics/*
+!data/rubrics/.gitkeep
+!data/rubrics/example_rubric.yaml
+
+# Gradescope autograder config (assignment-specific)
+gradescope_autograder/config.yaml
+
+# Test submissions (used for local autograder debugging, may contain student data)
+test_submissions/
+
+# Jupyter notebooks
+*.ipynb_checkpoints/

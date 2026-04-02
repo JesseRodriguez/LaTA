@@ -1,0 +1,249 @@
+# LaTA Configuration File (Example)
+#
+# Copy this file to config.yaml and customize for your assignment
+# cp config.example.yaml config.yaml
+
+system:
+  # Ollama API endpoint (default for local installation)
+  ollama_host: "http://localhost:11434/v1"
+
+  # --- WORKER 1: THE SEGMENTER ---
+  # Role: Extract problem sections from LaTeX submissions
+  # Needs: Fast inference, high precision
+  segmenter:
+    model_name: "llama3.1:8b"    # Recommended: llama3.1:8b, qwen2.5:7b, or gpt-oss:20b
+
+    # Ollama model options (passed directly to API)
+    ollama_options:
+      temperature: 0.0            # Robotic precision for structure extraction
+      num_ctx: 32768              # 32k context is sufficient for most LaTeX files
+      top_p: 0.1                  # Force high-confidence token selection
+      num_predict: 16384          # Max output length
+      stop: ["```json", "```"]    # Stop tokens (prevents chatting after JSON)
+
+  # --- WORKER 2: THE GRADER ---
+  # Role: Compare student work against reference solution and rubric
+  # Needs: Strong reasoning, large context window
+  grader:
+    model_name: "deepseek-r1:14b"  # Recommended: deepseek-r1:14b, qwen-qwq:32b, or gpt-oss:120b
+    is_reasoning_model: true        # Set to TRUE for models with <think> tags (DeepSeek-R1, QwQ, etc.)
+                                   # Set to FALSE for standard models (Llama, Qwen, Mistral)
+
+    ollama_options:
+      temperature: 0.1            # Low creativity (want consistent grading)
+      num_ctx: 65536              # 65k context (critical for long derivations)
+      top_p: 0.90                 # Standard sampling
+      num_predict: 8192           # Max output length (grading shouldn't be verbose)
+
+      # Anti-loop parameters (helps prevent repetitive reasoning)
+      repeat_penalty: 1.4         # Penalize repeated tokens (default 1.1, range 1.0-1.5)
+      repeat_last_n: 256          # Look back N tokens for repeats (default 64)
+      presence_penalty: 0.2       # Slight penalty for any repeated token
+
+  # Global safety settings
+  timeout: 600                    # Max time per LLM call (seconds)
+
+# File and directory paths
+paths:
+  # Input: Gradescope export directory (unzipped folder from Gradescope download)
+  export_dir: "data/input/Assignment1_Export"
+
+  # Rubric: YAML file defining grading criteria (relative to rubrics_dir)
+  rubric_file: "assignment1_rubric.yaml"
+
+  # Reference solution: Your complete LaTeX solution file
+  solution_file: "data/solutions/assignment1_solution.tex"
+
+  # Directories (usually don't need to change these)
+  rubrics_dir: "data/rubrics"
+  templates_dir: "templates"
+
+# Grading configuration
+grading:
+  # Assignment name (used for output folder naming)
+  assignment_name: "Assignment1"
+
+  # Subject area (appears in system prompt to set context for LLM)
+  subject: "Physics"  # Examples: "Thermodynamics", "Fluid Mechanics", "Calculus", etc.
+
+  # Anonymization: if true, student names are replaced with anonymized IDs
+  anonymize: false
+
+  # Incremental grading: skip students who have already been graded with the same submission
+  # This allows you to grade early submissions overnight, then grade late submissions in the morning
+  # without redoing work. If a student resubmits, a versioned report (e.g., _v2.pdf) is created.
+  skip_previously_graded: true
+
+  # Late penalty configuration
+  late_penalties:
+    enabled: true                          # Set to false to disable late penalty calculation
+    penalty_per_day: 0.20                  # Penalty rate (0.20 = 20% per day)
+    # IMPORTANT: Gradescope uses GMT/UTC timestamps!
+    # Convert your local deadline to GMT. For example:
+    #   - Local deadline: 2026-01-16 11:59 PM PST (UTC-8)
+    #   - GMT deadline:   2026-01-17 07:59:59
+    # Format: "YYYY-MM-DD HH:MM:SS" (24-hour format, GMT/UTC timezone)
+    due_date: "2026-01-17 07:59:59"
+
+    # Points awarded elsewhere (not graded by LLM, e.g., plots graded manually by TAs)
+    # Late penalty = penalty_percentage × (rubric_max_score + points_awarded_elsewhere)
+    # Example: If rubric max = 50, manual points = 10, penalty = 20%:
+    #   Total assignment points = 60
+    #   Late penalty = 0.2 × 60 = 12 points deducted (not just 10)
+    # Default: 0 (no manually graded points)
+    points_awarded_elsewhere: 0
+
+  # Error handling and retry configuration
+  error_handling:
+    # --- JSON Schema Error Handling ---
+    # When the LLM outputs invalid JSON (wrong format, missing fields, etc.)
+    retry_on_schema_error: true    # If true, automatically retry with enhanced prompt
+    max_retries: 1                 # Number of retry attempts before giving up (default: 1)
+    save_failed_submissions: true  # If true, save failed attempts to data/failed_submissions.yaml
+
+    # --- LaTeX Compilation Error Handling ---
+    # When PDF generation fails due to LaTeX errors in student feedback
+    fix_latex_errors: true         # If true, use LLM to fix LaTeX formatting errors
+    latex_fix_max_retries: 2       # Number of LaTeX fix attempts before giving up (default: 2)
+
+# Email notification configuration
+# Send feedback PDFs to students automatically after grading
+email:
+  # SMTP Server Configuration
+  # For Oregon State University:
+  smtp_server: "mail.engr.oregonstate.edu"
+  smtp_port: 25                   # Primary port (fallback: 465 for direct SSL)
+  use_ssl: false                   # Set to true if using port 465
+  use_tls: true                    # Set to true for STARTTLS on port 25
+
+  # IMPORTANT: Credentials are NEVER stored in config files!
+  # You will be prompted for your institutional email and password when sending emails.
+  # For OSU with SSO/Duo 2FA, you may need an app-specific password.
+
+  # Email Content Templates
+  # Variables available: {assignment_name}, {student_name}
+  subject_template: "{assignment_name} has been graded, your feedback is ready"
+  from_name: "LaTA Grading System"
+  # from_email: Prompted at runtime (use your institutional email for FERPA compliance)
+
+  body_template: |
+    Hello {student_name},
+
+    Your submission for {assignment_name} has been graded. Please see the attached PDF for detailed feedback from the LaTA evaluation system.
+
+    If you have questions about your grade, please contact your instructor or TA.
+
+    Best regards,
+    LaTA Grading System
+
+  # Error Handling and Delivery Settings
+  max_retries: 3                   # Retry failed sends up to 3 times
+  retry_delay: 2                   # Seconds between retries (uses exponential backoff: 2s, 4s, 8s)
+  timeout: 30                      # SMTP timeout in seconds
+  batch_delay: 0.5                 # Delay between emails (helps avoid rate limiting)
+
+  # USAGE:
+  # After grading, send feedback PDFs to students:
+  #   python post_grading.py send-feedback
+  #
+  # Test without sending (dry-run mode):
+  #   python post_grading.py send-feedback --dry-run
+  #
+  # Send only to test recipients:
+  #   python post_grading.py send-feedback --test-recipients your_email@oregonstate.edu
+  #
+  # Re-send to all students (even if already sent):
+  #   python post_grading.py send-feedback --force-resend
+  #
+  # Delivery tracking is saved to: data/output/{ASSIGNMENT}_Feedback/email_delivery.yaml
+
+# ------------------------------------------------------------------------------------
+# HOW ERROR RECOVERY WORKS:
+# ------------------------------------------------------------------------------------
+#
+# 1. JSON Schema Errors (e.g., LLM outputs "The student scored 5/10" instead of JSON):
+#    - LaTA saves the broken response to data/debug/StudentID/ProblemLabel/
+#    - If retry_on_schema_error=true, LaTA retries with an enhanced prompt that:
+#      * Warns the LLM about the specific error that occurred
+#      * Emphasizes the need to output valid JSON
+#      * Provides the previous error message for context
+#    - After max_retries attempts, the failure is logged to failed_submissions.yaml
+#    - You can manually review and grade these submissions later
+#
+# 2. LaTeX Compilation Errors (e.g., unescaped % sign in student hint):
+#    - LaTA parses the .log file to extract error messages
+#    - If fix_latex_errors=true, LaTA:
+#      * Sends the broken .tex file + error log to the LLM
+#      * Asks the LLM to fix ONLY formatting issues (not content)
+#      * Retries PDF compilation with the fixed LaTeX
+#    - Original broken .tex files are saved to data/output/logs/ for debugging
+#    - After latex_fix_max_retries attempts, LaTA gives up and:
+#      * Returns a partial PDF if one was generated
+#      * Returns None if compilation completely failed
+#
+# ------------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------------
+# MODEL SELECTION GUIDE:
+# ------------------------------------------------------------------------------------
+#
+# Segmenter (Structure Extraction):
+#   - Priority: Speed and precision
+#   - Recommended: 7-20B parameter models
+#   - Good choices:
+#     * llama3.1:8b (fast, reliable)
+#     * qwen2.5:7b (very fast)
+#     * gpt-oss:20b (most accurate)
+#
+# Grader (Reasoning and Evaluation):
+#   - Priority: Reasoning ability, large context
+#   - Recommended: 14B+ parameter models with reasoning capabilities
+#   - Good choices:
+#     * deepseek-r1:14b (excellent reasoning, free)
+#     * deepseek-r1:32b (stronger reasoning, needs more VRAM)
+#     * qwen-qwq:32b (strong alternative to DeepSeek)
+#     * gpt-oss:120b (most powerful, very slow)
+#
+# Reasoning Models vs Standard Models:
+#   - Reasoning models (DeepSeek-R1, QwQ) use <think> tags for chain-of-thought
+#   - Set is_reasoning_model: true for these models
+#   - LaTA will automatically:
+#     * Display thinking process in real-time during grading
+#     * Strip <think> tags from final output
+#     * Use extended timeouts for complex reasoning
+#
+# ------------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------------
+# TROUBLESHOOTING TIPS:
+# ------------------------------------------------------------------------------------
+#
+# Problem: Grading is too slow
+#   - Use a smaller/faster model for grader (e.g., deepseek-r1:14b instead of :32b)
+#   - Reduce num_ctx if your problems are short
+#   - Check Ollama GPU utilization
+#
+# Problem: LLM gives inconsistent grades
+#   - Decrease temperature (try 0.05 or 0.0)
+#   - Increase num_ctx for longer problems
+#   - Add more specific REJECT conditions in rubric
+#   - Use a stronger reasoning model
+#
+# Problem: Model gets stuck in reasoning loops
+#   - Increase repeat_penalty to 1.5 or 1.6
+#   - Decrease num_predict to force earlier termination
+#   - The retry system will automatically add anti-loop prompts
+#
+# Problem: JSON parsing errors
+#   - Enable retry_on_schema_error: true
+#   - Check data/debug/ to see what the model actually output
+#   - Try a different model (some are better at JSON than others)
+#   - Consider using instructor library for strict schema enforcement (advanced)
+#
+# Problem: LaTeX compilation fails frequently
+#   - Enable fix_latex_errors: true
+#   - Check data/output/logs/ for specific errors
+#   - Review templates/feedback_report.tex for custom LaTeX packages
+#   - Ensure pdflatex is properly installed
+#
+# ------------------------------------------------------------------------------------
