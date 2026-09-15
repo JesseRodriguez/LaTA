@@ -650,6 +650,10 @@ class LatexReporter:
             return True
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return False
+        except FileNotFoundError:
+            print("   ❌ pdflatex not found on PATH -- cannot compile feedback PDFs. "
+                  "Install a LaTeX distribution (e.g. MacTeX) or add it to PATH.")
+            return False
 
     def generate_no_original_submission_report(self, student_name: str, student_id: str, submission_created_at: str = None):
         """
@@ -753,7 +757,7 @@ class LatexReporter:
             print(f"   ❌ Error compiling placeholder report: {e}")
             return None
 
-    def generate_report(self, grade_result, fix_attempt: int = 0, tex_content: str = None, submission_created_at: str = None, force_regrade: bool = False, segmentation_warning: bool = False, extension_hours: float = 0):
+    def generate_report(self, grade_result, fix_attempt: int = 0, tex_content: str = None, submission_created_at: str = None, force_regrade: bool = False, segmentation_warning: bool = False, extension_hours: float = 0, _filename: str = None):
         """
         Generates a PDF report from grading results.
 
@@ -764,6 +768,8 @@ class LatexReporter:
             submission_created_at: Timestamp of submission (for versioning resubmissions)
             force_regrade: If True, skips versioning and overwrites existing report
             segmentation_warning: If True, adds warning about LaTeX file issues to feedback
+            _filename: Internal. Report filename (without extension) fixed by the first
+                attempt, so LaTeX-fix retries write to the same file.
         """
         # Use student_name for filename if available, otherwise fall back to student_id
         if grade_result.student_name:
@@ -772,13 +778,19 @@ class LatexReporter:
             safe_name = grade_result.student_id.replace(" ", "_").replace("(", "").replace(")", "")
 
         # Check for existing reports and determine version
-        # Skip versioning if force_regrade is True
-        if force_regrade:
-            version_suffix = ""
+        # Skip versioning if force_regrade is True.
+        # A LaTeX-fix retry must reuse the first attempt's filename rather than ask for the
+        # version again: _get_version_suffix records the new submission timestamp on its
+        # first call, so a second call sees "same submission" and returns "" -- which wrote
+        # a resubmission's fixed report over the student's original Feedback_<name>.pdf.
+        if _filename is not None:
+            filename = _filename
         else:
-            version_suffix = self._get_version_suffix(safe_name, submission_created_at)
-
-        filename = f"Feedback_{safe_name}{version_suffix}"
+            if force_regrade:
+                version_suffix = ""
+            else:
+                version_suffix = self._get_version_suffix(safe_name, submission_created_at)
+            filename = f"Feedback_{safe_name}{version_suffix}"
         tex_path = self.output_dir / f"{filename}.tex"
         pdf_path = self.output_dir / f"{filename}.pdf"
 
@@ -937,12 +949,16 @@ class LatexReporter:
             return pdf_path
         else:
             # Compilation failed
+            # pdflatex writes the .log next to the PDF in output_dir; _cleanup_aux_files moves
+            # it to logs_dir afterwards. Parsing the logs_dir copy before that move gave the
+            # LLM fixer "Log file not found." -- or a stale log from an earlier run.
+            fresh_log_path = self.output_dir / f"{filename}.log"
             log_path = self.logs_dir / f"{filename}.log"
 
             # Check if we should attempt LLM-based fixing
             if self.fix_latex_errors and fix_attempt < self.latex_fix_max_retries:
                 # Parse error log and count errors
-                error_summary = self._parse_latex_log(log_path)
+                error_summary = self._parse_latex_log(fresh_log_path)
                 error_count = error_summary.count('!')  # Count explicit error markers
 
                 # Skip LLM fixing if there are too many errors (likely a blank/zero-credit submission)
@@ -982,7 +998,9 @@ class LatexReporter:
                     tex_content=fixed_tex,
                     submission_created_at=submission_created_at,
                     force_regrade=force_regrade,
-                    segmentation_warning=segmentation_warning
+                    segmentation_warning=segmentation_warning,
+                    extension_hours=extension_hours,
+                    _filename=filename
                 )
             else:
                 # Give up after max retries or if fixing is disabled
