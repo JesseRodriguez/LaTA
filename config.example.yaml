@@ -40,6 +40,26 @@ system:
       repeat_last_n: 256          # Look back N tokens for repeats (default 64)
       presence_penalty: 0.2       # Slight penalty for any repeated token
 
+  # --- ALTERNATIVE GRADER: any OpenAI-compatible server ---
+  # (llama.cpp's llama-server, vLLM, LM Studio, ...). Replace the grader block above with:
+  #
+  # grader:
+  #   backend: openai
+  #   base_url: "http://localhost:8080/v1"   # the server's OpenAI-compatible endpoint
+  #   model_name: "qwen38-next"              # the name the server exposes (llama-server --alias)
+  #   is_reasoning_model: true               # reasoning is read from reasoning_content
+  #   openai_options:                        # sent as request-body fields
+  #     temperature: 0.1
+  #     top_p: 0.9
+  #     presence_penalty: 0.2
+  #     max_tokens: 16384                    # must leave room for thinking AND the JSON answer
+  #   chat_template_kwargs:                  # passed to the model's chat template, if it takes any
+  #     reasoning_effort: low
+  #
+  # Do not copy ollama_options across. Ollama's native API applies repeat_penalty, but so does
+  # llama-server -- and at 1.4 it destroys JSON output (every rubric item must repeat the same
+  # keys). Leave it out, or at the server default of 1.0-1.1. See docs/GETTING_STARTED.md.
+
   # Global safety settings
   # Longest wait (seconds) for the next bytes from the LLM server before a request fails.
   # Multiplied by grading.concurrency, since prefill and queueing take longer when several

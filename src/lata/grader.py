@@ -91,13 +91,29 @@ class LatexGrader:
         self.model = grader_conf['model_name']
         self.is_reasoning_model = grader_conf.get('is_reasoning_model', False)
 
+        # Backend. "ollama" (default) talks to Ollama's native API, which is what applies
+        # ollama_options such as repeat_penalty -- Ollama's OpenAI-compatible /v1 endpoint
+        # silently drops options that are not OpenAI parameters.
+        # "openai" talks to any OpenAI-compatible server (llama.cpp's llama-server, vLLM,
+        # LM Studio ...) at grader.base_url, sending openai_options and chat_template_kwargs
+        # as request fields, and streaming reasoning from reasoning_content.
+        self.backend = str(grader_conf.get('backend', 'ollama')).lower()
+        if self.backend not in ('ollama', 'openai'):
+            raise ValueError(f"system.grader.backend must be 'ollama' or 'openai', not {self.backend!r}")
+        self.base_url = grader_conf.get('base_url') or self.config['system']['ollama_host']
+        if self.backend == 'openai' and not grader_conf.get('base_url'):
+            raise ValueError("system.grader.base_url is required when backend is 'openai' "
+                             "(e.g. http://localhost:8080/v1 for llama-server)")
+
         self.raw_client = OpenAI(
-            base_url=self.config['system']['ollama_host'],
-            api_key="ollama"
+            base_url=self.base_url,
+            api_key=grader_conf.get('api_key', 'ollama')
         )
 
         # We grab options from the 'grader' section now
         self.options = grader_conf.get('ollama_options', {})
+        self.openai_options = grader_conf.get('openai_options', {}) or {}
+        self.chat_template_kwargs = grader_conf.get('chat_template_kwargs') or None
 
         # Error handling configuration
         error_conf = self.config.get('grading', {}).get('error_handling', {})
@@ -161,6 +177,9 @@ class LatexGrader:
     def _cache_key(self, problem_label: str, student_text: str, solution_text: str,
                    rubric_str: str, subject: str) -> str:
         payload = json.dumps({
+            "backend": self.backend, "base_url": self.base_url if self.backend == 'openai' else None,
+            "openai_options": self.openai_options if self.backend == 'openai' else None,
+            "chat_template_kwargs": self.chat_template_kwargs if self.backend == 'openai' else None,
             "model": self.model, "options": self.options, "subject": subject,
             "problem": problem_label, "rubric": rubric_str,
             "solution": solution_text, "student": student_text,
@@ -252,6 +271,58 @@ class LatexGrader:
         # If no valid JSON found, return original text (will fail validation with clear error)
         return text
 
+    class _StreamSink:
+        """Collects a streamed response: writes thinking.txt as it arrives, feeds the progress
+        monitor, and prints the thinking live on single-slot runs."""
+
+        def __init__(self, grader, debug_dir: Path):
+            self.g = grader
+            self.debug_dir = debug_dir
+            self.think_parts, self.content_parts = [], []
+            self.started_thinking = self.finished_thinking = False
+            self.think_file = None
+
+        def thinking(self, token: str):
+            if not token:
+                return
+            if self.think_file is None:
+                self.think_file = open(self.debug_dir / "thinking.txt", "w")
+            self.think_file.write(token)
+            self.think_file.flush()
+            self.think_parts.append(token)
+            if self.g.monitor:
+                self.g.monitor.token("thinking", token)
+            if self.g.live_output:
+                if not self.started_thinking:
+                    self.started_thinking = True
+                    print("\n   💭 Model thinking:", flush=True)
+                    print("      ", end='', flush=True)
+                # Print with proper indentation for newlines
+                if '\n' in token:
+                    lines = token.split('\n')
+                    for i, line in enumerate(lines):
+                        if i > 0:
+                            print(f"\n      ", end='', flush=True)
+                        print(line, end='', flush=True)
+                else:
+                    print(token, end='', flush=True)
+
+        def content(self, token: str):
+            if not token:
+                return
+            if self.g.live_output and self.started_thinking and not self.finished_thinking:
+                self.finished_thinking = True
+                print("\n   💭 Done thinking.\n", flush=True)
+            self.content_parts.append(token)
+            if self.g.monitor:
+                self.g.monitor.token("content", token)
+
+        def close(self) -> Tuple[str, str]:
+            if self.think_file is not None:
+                self.think_file.close()
+                self.think_file = None
+            return "".join(self.think_parts), "".join(self.content_parts)
+
     def _stream_response_with_thinking(self, messages: list, debug_dir: Path) -> Tuple[str, str]:
         """
         Streams the response from the model using Ollama's native think parameter.
@@ -271,61 +342,61 @@ class LatexGrader:
             options=self.options
         )
 
-        think_parts = []
-        response_parts = []
-        started_thinking = False
-        finished_thinking = False
-        think_file = None
-        monitor = self.monitor
-
+        sink = self._StreamSink(self, debug_dir)
         try:
             for chunk in stream:
                 if self.stop_event.is_set():
                     raise GradingCancelled()
-
                 msg = chunk.get('message', {})
-                thinking_token = msg.get('thinking')
-                content_token = msg.get('content')
-
-                # Handle thinking tokens
-                if thinking_token:
-                    if think_file is None:
-                        think_file = open(debug_dir / "thinking.txt", "w")
-                    think_file.write(thinking_token)
-                    think_file.flush()
-                    think_parts.append(thinking_token)
-                    if monitor:
-                        monitor.token("thinking", thinking_token)
-
-                    if self.live_output:
-                        if not started_thinking:
-                            started_thinking = True
-                            print("\n   💭 Model thinking:", flush=True)
-                            print("      ", end='', flush=True)
-
-                        # Print with proper indentation for newlines
-                        if '\n' in thinking_token:
-                            lines = thinking_token.split('\n')
-                            for i, line in enumerate(lines):
-                                if i > 0:
-                                    print(f"\n      ", end='', flush=True)
-                                print(line, end='', flush=True)
-                        else:
-                            print(thinking_token, end='', flush=True)
-
-                # Handle content tokens
-                if content_token:
-                    if self.live_output and started_thinking and not finished_thinking:
-                        finished_thinking = True
-                        print("\n   💭 Done thinking.\n", flush=True)
-                    response_parts.append(content_token)
-                    if monitor:
-                        monitor.token("content", content_token)
+                sink.thinking(msg.get('thinking'))
+                sink.content(msg.get('content'))
         finally:
-            if think_file is not None:
-                think_file.close()
+            result = sink.close()
+        return result
 
-        return "".join(think_parts), "".join(response_parts)
+    def _stream_openai_response(self, messages: list, debug_dir: Path) -> Tuple[str, str]:
+        """
+        Streams from an OpenAI-compatible server (backend: openai). Reasoning arrives in
+        delta.reasoning_content (llama.cpp with --reasoning-format deepseek, DeepSeek API)
+        or delta.reasoning (vLLM and others); the answer in delta.content.
+
+        openai_options and chat_template_kwargs are sent as raw request-body fields rather
+        than SDK arguments, so server extensions (top_k, min_p, repeat_penalty) pass through
+        unchanged instead of being rejected by the client library.
+        Returns (thinking_content, response_content).
+        """
+        if self.stop_event.is_set():
+            raise GradingCancelled()
+
+        body = dict(self.openai_options)
+        if self.chat_template_kwargs:
+            body["chat_template_kwargs"] = self.chat_template_kwargs
+
+        stream = self.raw_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            stream=True,
+            timeout=self.request_timeout,
+            extra_body=body,
+        )
+
+        sink = self._StreamSink(self, debug_dir)
+        try:
+            for chunk in stream:
+                if self.stop_event.is_set():
+                    stream.close()
+                    raise GradingCancelled()
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                extra = getattr(delta, "model_extra", None) or {}
+                reasoning = (getattr(delta, "reasoning_content", None) or extra.get("reasoning_content")
+                             or getattr(delta, "reasoning", None) or extra.get("reasoning"))
+                sink.thinking(reasoning)
+                sink.content(delta.content)
+        finally:
+            result = sink.close()
+        return result
 
     def _sanitize_json(self, text: str) -> str:
         """
@@ -578,7 +649,17 @@ class LatexGrader:
             ]
 
             # Use streaming for reasoning models to show thinking in real-time
-            if self.is_reasoning_model:
+            if self.backend == 'openai':
+                # OpenAI-compatible server: always streamed; reasoning, if any, comes
+                # back separately from the answer
+                thinking, response_content = self._stream_openai_response(messages, debug_dir)
+
+                response_filename = f"response_attempt_{retry_attempt}.txt" if retry_attempt > 0 else "response.txt"
+                with open(debug_dir / response_filename, "w") as f:
+                    f.write(response_content)
+
+                text_after_think = response_content
+            elif self.is_reasoning_model:
                 # Use Ollama's native think parameter - returns separated thinking and content
                 thinking, response_content = self._stream_response_with_thinking(messages, debug_dir)
 

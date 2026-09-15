@@ -70,12 +70,14 @@ class LatexReporter:
 
         # Initialize OpenAI client for LaTeX error fixing
         if self.fix_latex_errors:
-            self.raw_client = OpenAI(
-                base_url=self.config['system']['ollama_host'],
-                api_key="ollama"
-            )
-            # Use the grader model for fixing (it's smarter)
+            # Use the grader model for fixing (it's smarter), on the grader's backend
             grader_conf = self.config['system']['grader']
+            self.fixer_backend = str(grader_conf.get('backend', 'ollama')).lower()
+            self.raw_client = OpenAI(
+                base_url=(grader_conf.get('base_url') if self.fixer_backend == 'openai'
+                          else None) or self.config['system']['ollama_host'],
+                api_key=grader_conf.get('api_key', 'ollama')
+            )
             self.fixer_model = grader_conf['model_name']
             self.fixer_options = grader_conf.get('ollama_options', {})
 
@@ -539,11 +541,12 @@ class LatexReporter:
                 ],
                 temperature=0.1,  # Low temperature for precise fixes
                 timeout=300,  # 5-minute timeout for LLM fix
-                extra_body={"options": {
+                # Ollama takes its options object; an OpenAI-compatible server takes max_tokens
+                extra_body=({"options": {
                     "num_ctx": 65536,  # Large context for full .tex file
                     "num_predict": 16384,
                     "temperature": 0.1
-                }}
+                }} if self.fixer_backend == 'ollama' else {"max_tokens": 16384})
             )
 
             fixed_content = response.choices[0].message.content.strip()

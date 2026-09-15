@@ -459,6 +459,51 @@ The segmenter extracts problem sections from student LaTeX files. It needs to be
 | `qwen2.5:7b` | 7B | Very fast | Lightweight alternative |
 | `gpt-oss:20b` | 20B | Moderate | Most accurate segmentation |
 
+### Using an OpenAI-Compatible Server (llama.cpp, vLLM)
+
+Models Ollama cannot run -- new architectures, or GGUF quantizations served by llama.cpp's
+`llama-server` -- can be used for grading through any OpenAI-compatible endpoint:
+
+```yaml
+system:
+  grader:
+    backend: openai
+    base_url: "http://localhost:8080/v1"
+    model_name: "qwen38-next"          # llama-server --alias
+    is_reasoning_model: true
+    openai_options:
+      temperature: 0.1
+      top_p: 0.9
+      presence_penalty: 0.2
+      max_tokens: 16384
+    chat_template_kwargs:
+      reasoning_effort: low
+```
+
+`openai_options` and `chat_template_kwargs` are sent as request-body fields, so server-specific
+parameters (`top_k`, `min_p`, ...) pass through unchanged. Reasoning is streamed from
+`reasoning_content` (llama-server with `--reasoning-format deepseek`) or `reasoning`, into
+`thinking.txt` and the dashboard exactly as with Ollama. The segmenter keeps using Ollama.
+
+Serve with enough parallel slots for your `concurrency`, e.g.
+`llama-server --parallel 4 --ctx-size $((4 * 32768)) --jinja --reasoning-format deepseek ...`
+(llama-server's context size is shared across slots).
+
+Three settings that silently ruin grading on these servers:
+
+- **`repeat_penalty`.** Ollama's native API applies it, and so does llama-server. At the 1.4
+  used for Ollama above, JSON output falls apart, because every rubric item has to repeat
+  the same keys. With 1.4 a grading query returned no content at all; with 1.1 it returned
+  valid JSON for all 20 rubric items. Leave it unset.
+- **A server-side reasoning budget** (`--reasoning-budget`). Some models answer when the
+  budget cuts their thinking short. Others (Qwen3.8-Next) stop with an empty answer, which
+  fails schema validation. Bound output with `max_tokens` instead, and make sure it leaves
+  room for the JSON after the thinking.
+- **The maximum reasoning effort.** If a model's template defaults to its highest effort
+  (Qwen3.8-Next defaults to `xhigh`), some problems think until they hit `max_tokens` and
+  return nothing. For Qwen3.8-Next, `reasoning_effort: low` used about 43% fewer tokens
+  than `xhigh`, and a 100-submission grading run at `low` returned valid JSON every time.
+
 ### Grader (Rubric Evaluation)
 
 The grader compares student work against the reference solution. It needs strong reasoning and the ability to follow structured instructions.
