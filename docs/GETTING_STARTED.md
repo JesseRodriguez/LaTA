@@ -304,21 +304,21 @@ With one slot, LaTA streams the model's thinking to the terminal as before. With
 one, the terminal becomes a live dashboard instead:
 
 ```
- LaTA  ·  ME373_HW3 · gpt-oss:120b  ·  4 slots  ·  elapsed 1:12:40
+ LaTA  ·  MyAssignment · gpt-oss:120b  ·  4 slots  ·  elapsed 1:12:40
  [████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  31.2%   students 56/180   problems 168/540
  76.1 tok/s   139 problems/hr   ETA 2:40:11 (≈ Tue 03:52)   🔍 3 score fixes
  ─────────────────────────────────────────────────────────────────────────────
  slot 1  Jane Doe            Problem 2    thinking     02:11   3,812 tok   19.4 tok/s
  slot 2  John Smith          Problem 1    answering    01:05   2,004 tok   18.9 tok/s
- slot 3  Alex Kim            Problem 3    waiting      00:14       0 tok   (prefill / queued)
- slot 4  Sam Lee             Problem 2    thinking     00:48     930 tok   19.1 tok/s
+ slot 3  Student C           Problem 3    waiting      00:14       0 tok   (prefill / queued)
+ slot 4  Student D           Problem 2    thinking     00:48     930 tok   19.1 tok/s
  ─────────────────────────────────────────────────────────────────────────────
  Live thinking · slot 1 · Jane Doe · Problem 2
    ...the last lines of the model's reasoning, updated as it streams...
  ─────────────────────────────────────────────────────────────────────────────
  Recent
  01:12:31  [John Smith] ✅ Successfully graded Problem 3
- 01:12:33  ✅ [John Smith] Report generated: data/output/ME373_HW3_Feedback/Feedback_John_Smith.pdf
+ 01:12:33  ✅ [John Smith] Report generated: data/output/MyAssignment_Feedback/Feedback_John_Smith.pdf
 ```
 
 - `--watch-slot N` picks which slot's thinking is shown (it follows any busy slot when that one is idle).
