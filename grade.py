@@ -14,14 +14,19 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import sys
 import yaml
 import time
 import argparse
 from pathlib import Path
-from src.lata.ingest import GradescopeIngestor
-from src.lata.segmenter import LatexSegmenter
-from src.lata.grader import LatexGrader, GradeResult, GradeItem
-from src.lata.reporter import LatexReporter
+# Import as `lata`, the same package name the modules use for each other. Importing as
+# `src.lata` loaded a second copy of every module, so classes such as GradeItem existed
+# twice -- harmless for duck-typed data, but it breaks exception matching.
+from lata.ingest import GradescopeIngestor
+from lata.segmenter import LatexSegmenter
+from lata.grader import LatexGrader, GradeResult, GradeItem
+from lata.reporter import LatexReporter
+from lata.scheduler import ProblemJob, StudentPlan, ProgressMonitor, GradingCancelled, run_jobs
 
 def main():
     parser = argparse.ArgumentParser()
@@ -31,12 +36,27 @@ def main():
         nargs='+',
         help="Force regrade for specific student(s) without versioning. Accepts multiple names/IDs separated by spaces."
     )
+    parser.add_argument("--config", type=str, default="config.yaml",
+                        help="Path to the configuration file (default: config.yaml)")
+    parser.add_argument("--concurrency", type=int, default=None,
+                        help="Grading requests to run in parallel (overrides grading.concurrency). "
+                             "The LLM server must allow at least this many: for Ollama set "
+                             "OLLAMA_NUM_PARALLEL >= N and restart it.")
+    parser.add_argument("--watch-slot", type=int, default=1,
+                        help="With concurrency > 1, which slot's thinking to show live on the dashboard (default: 1)")
+    parser.add_argument("--no-dashboard", action="store_true",
+                        help="With concurrency > 1, print plain log lines and a periodic status line "
+                             "instead of the live dashboard (automatic when output is not a terminal)")
     args = parser.parse_args()
 
     # 1. Load Config & Assets
-    with open("config.yaml", 'r') as f:
+    config_path = args.config
+    with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    
+
+    concurrency = args.concurrency if args.concurrency is not None else config.get('grading', {}).get('concurrency', 1)
+    concurrency = max(1, int(concurrency))
+
     # Check for required PDF metadata file
     export_dir = Path(config['paths']['export_dir'])
     pdf_metadata_path = export_dir / 'pdf_submission_metadata.yml'
@@ -102,10 +122,11 @@ def main():
 
     # 3. Initialize Workers
     output_dir = f"data/output/{assignment_name}_Feedback"
-    segmenter = LatexSegmenter()
-    grader = LatexGrader(output_dir=output_dir)
+    segmenter = LatexSegmenter(config_path=config_path)
+    grader = LatexGrader(config_path=config_path, output_dir=output_dir, concurrency=concurrency)
     reporter = LatexReporter(
         output_dir=output_dir,
+        config_path=config_path,
         is_corrections_mode=is_corrections_mode,
         base_assignment=base_assignment if is_corrections_mode else None
     )
@@ -114,7 +135,7 @@ def main():
     print("🔹 Segmenting Reference Solution...")
     with open(config['paths']['solution_file'], 'r') as f:
         sol_content = f.read()
-    
+
     sol_chunks_map = {}
     sol_seg_result = segmenter.segment_submission(sol_content)
     for chunk in sol_seg_result.chunks:
@@ -159,19 +180,24 @@ def main():
             print(f"❌ No student found for '{args.student}'")
             return
 
-    # 6. Grading Loop
-    for student in targets:
-        print(f"\n🎓 Processing: {student.student_name} ({student.anonymized_id})")
+    # 6. Plan: decide who needs grading and segment their work, before any grading.
+    # Segmentation is nearly always regex; its LLM fallback uses a different model than the
+    # grader, so doing it all up front means the server swaps models once instead of
+    # mid-run while grading slots are busy.
+    skip_previously_graded = config.get('grading', {}).get('skip_previously_graded', True)
+    plans = []
+    skipped = 0
 
+    for student in targets:
         # Check if we should skip this student (already graded with same timestamp)
         # Skip the skip check if this student is being force-regraded
-        is_regrade = args.regrade and student in regrade_list
-        skip_previously_graded = config.get('grading', {}).get('skip_previously_graded', True)
+        is_regrade = bool(args.regrade) and student in regrade_list
 
         if not is_regrade and skip_previously_graded and reporter.should_skip_student(student.student_name, student.created_at):
-            print(f"   ⏭️  Skipping (already graded, no new submission)")
+            skipped += 1
             continue
 
+        print(f"\n🎓 Preparing: {student.student_name} ({student.anonymized_id})")
         if is_regrade:
             print(f"   🔄 REGRADE: Forcing fresh grading (no versioning)")
 
@@ -195,31 +221,92 @@ def main():
         stu_seg = segmenter.segment_submission(student.cleaned_content)
         stu_chunks_map = {c.label: c.content for c in stu_seg.chunks}
 
-        all_grade_items = []
+        plan = StudentPlan(student=student, is_regrade=is_regrade,
+                           segmentation_warning=stu_seg.segmentation_warning)
 
-        # B. Loop over Rubric Problems (Problem 1, Problem 2...)
-        for problem_label, sub_problems in full_rubric.items():
-
-            # Get the relevant text chunks
+        # B. One job per rubric problem (Problem 1, Problem 2...)
+        for problem_index, (problem_label, sub_problems) in enumerate(full_rubric.items()):
             # Default to empty string if missing (student left it blank)
-            stu_text = stu_chunks_map.get(problem_label, "(Student left this problem blank.)")
-            sol_text = sol_chunks_map.get(problem_label, "(No reference solution found for this section.)")
-
-            # Grade this chunk
-            items = grader.grade_chunk(
+            plan.jobs.append(ProblemJob(
+                student_index=len(plans),
+                problem_index=problem_index,
                 problem_label=problem_label,
-                student_text=stu_text,
-                solution_text=sol_text,
+                student_text=stu_chunks_map.get(problem_label, "(Student left this problem blank.)"),
+                solution_text=sol_chunks_map.get(problem_label, "(No reference solution found for this section.)"),
                 rubric_items=sub_problems,
-                student_id=student.anonymized_id
+            ))
+        plans.append(plan)
+
+    if skipped:
+        print(f"\n⏭️  Skipped {skipped} student(s) already graded with no new submission")
+
+    total_problems = sum(len(p.jobs) for p in plans)
+    if not plans:
+        print("\nNothing to grade.")
+        grader.save_failed_submissions_to_file()
+        return
+
+    print(f"\n📋 {len(plans)} student(s), {total_problems} problem(s) to grade "
+          f"with {concurrency} slot{'s' if concurrency != 1 else ''}")
+    if concurrency > 1:
+        print(f"   The grading server must allow at least {concurrency} parallel requests "
+              f"(Ollama: OLLAMA_NUM_PARALLEL >= {concurrency}), or the extra requests just queue.")
+
+    # 7. Grade
+    monitor = None
+    if concurrency > 1:
+        use_dashboard = not args.no_dashboard and sys.stdout.isatty()
+        monitor = ProgressMonitor(
+            total_students=len(plans), total_problems=total_problems, concurrency=concurrency,
+            title=f"{assignment_name} · {grader.model}",
+            log_path=Path(output_dir) / "grading_run.log",
+            watch_slot=args.watch_slot, dashboard=use_dashboard,
+        )
+        grader.monitor = monitor
+
+    def grade_job(plan, job):
+        student = plan.student
+        if concurrency > 1:
+            grader.set_context(student.student_name)
+        elif job.problem_index == 0:
+            # Single slot keeps the original per-student console flow
+            print(f"\n🎓 Processing: {student.student_name} ({student.anonymized_id})")
+        if monitor:
+            monitor.begin(student.student_name, job.problem_label)
+        items, ok, cancelled = [], False, False
+        try:
+            items = grader.grade_chunk(
+                problem_label=job.problem_label,
+                student_text=job.student_text,
+                solution_text=job.solution_text,
+                rubric_items=job.rubric_items,
+                student_id=student.anonymized_id,
+                use_cache=not plan.is_regrade,
             )
+            ok = bool(items)
+            return items
+        except GradingCancelled:
+            cancelled = True
+            raise
+        except Exception as e:
+            # grade_chunk handles its own errors; this guards the scheduler against anything else
+            print(f"   ❌ [{student.student_name}] Unexpected error grading {job.problem_label}: {e}")
+            return []
+        finally:
+            if monitor:
+                monitor.end(ok, cached=getattr(grader._tls, "last_from_cache", False), cancelled=cancelled)
 
-            all_grade_items.extend(items)
+    def finish_student(plan, all_grade_items):
+        # C. Aggregate & Report (always on the main thread: reports, pdflatex and
+        # grading_metadata.yaml are never touched concurrently)
+        student = plan.student
+        tag = f"[{student.student_name}] " if concurrency > 1 else ""
 
-        # C. Aggregate & Report
         if not all_grade_items:
-            print("   ⚠️ No grade items produced. Skipping report.")
-            continue
+            print(f"   ⚠️ {tag}No grade items produced. Skipping report.")
+            if monitor:
+                monitor.student_done(False)
+            return
 
         # Separate regular and extra credit items
         regular_items = [i for i in all_grade_items if not getattr(i, 'is_extra_credit', False)]
@@ -248,16 +335,34 @@ def main():
         pdf_path = reporter.generate_report(
             final_result,
             submission_created_at=student.created_at,
-            force_regrade=is_regrade,
-            segmentation_warning=stu_seg.segmentation_warning,
+            force_regrade=plan.is_regrade,
+            segmentation_warning=plan.segmentation_warning,
             extension_hours=student.extension_hours
         )
         if pdf_path:
-            print(f"   ✅ Report generated: {pdf_path}")
+            print(f"   ✅ {tag}Report generated: {pdf_path}")
         else:
-            print("   ❌ Report generation failed.")
+            print(f"   ❌ {tag}Report generation failed.")
+        if monitor:
+            monitor.student_done(bool(pdf_path))
 
-    # 6. Save failed submissions if any
+    interrupted = False
+    if monitor:
+        monitor.start()
+    try:
+        run_jobs(plans, grade_job, finish_student, concurrency, monitor, grader.stop_event)
+    except KeyboardInterrupt:
+        interrupted = True
+        grader.stop_event.set()
+    finally:
+        if monitor:
+            monitor.stop()
+
+    if interrupted:
+        print("\n⏹️  Stopped. Students whose reports were generated are complete; problems graded "
+              "for unfinished students were saved and will be reused when you run grade.py again.")
+
+    # 8. Save failed submissions if any
     grader.save_failed_submissions_to_file()
 
 if __name__ == "__main__":

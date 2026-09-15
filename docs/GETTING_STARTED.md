@@ -206,8 +206,41 @@ system:
       repeat_penalty: 1.4                    # Anti-loop for reasoning models
       repeat_last_n: 256
 
-  timeout: 600                               # Max seconds per LLM call
+  timeout: 600                               # Max seconds to wait for the next bytes from the
+                                             # server; multiplied by grading.concurrency
 ```
+
+### Parallel Grading
+
+```yaml
+grading:
+  concurrency: 4          # Problems graded at the same time (default: 1)
+  resume_partial: true    # Reuse problems graded by an interrupted run (default: true)
+```
+
+Almost all of LaTA's run time is spent waiting on the grading model, one problem at a time.
+With `concurrency: N`, up to N problems are sent at once. **The server has to allow it**:
+Ollama handles one request at a time unless `OLLAMA_NUM_PARALLEL` is raised, and extra
+requests simply wait in line. On macOS:
+
+```bash
+launchctl setenv OLLAMA_NUM_PARALLEL 4   # lasts until reboot
+# then quit and reopen Ollama, and confirm in ~/.ollama/logs/server.log:
+grep -o "OLLAMA_NUM_PARALLEL:[0-9]*" ~/.ollama/logs/server.log | tail -1
+```
+
+Measured with `gpt-oss:120b` on an M3 Ultra (256 GB), grading real rubric prompts:
+
+| Parallel requests | Tokens/sec (total) | Speedup |
+|---|---|---|
+| 1 | 49.6 | 1.0x |
+| 2 | 63.0 | 1.27x |
+| 4 | 76.6 | 1.55x |
+| 8 | 73.2 | 1.48x |
+
+Memory bandwidth, not memory size, sets the ceiling, so gains stop around 4 here. Measure
+on your own hardware before going higher. Grades do not depend on the concurrency setting;
+reports, `grading_metadata.yaml` and PDF compilation always run one at a time.
 
 ### Late Penalties
 
@@ -260,7 +293,51 @@ uv run python grade.py --student "934527676"
 
 # Re-grade specific students (deletes existing feedback first)
 uv run python grade.py --regrade "Jane Doe" "John Smith"
+
+# Grade 4 problems at a time (see Parallel Grading) and use another config file
+uv run python grade.py --concurrency 4 --config config.yaml
 ```
+
+### Monitoring a Parallel Run
+
+With one slot, LaTA streams the model's thinking to the terminal as before. With more than
+one, the terminal becomes a live dashboard instead:
+
+```
+ LaTA  ·  ME373_HW3 · gpt-oss:120b  ·  4 slots  ·  elapsed 1:12:40
+ [████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░]  31.2%   students 56/180   problems 168/540
+ 76.1 tok/s   139 problems/hr   ETA 2:40:11 (≈ Tue 03:52)   🔍 3 score fixes
+ ─────────────────────────────────────────────────────────────────────────────
+ slot 1  Jane Doe            Problem 2    thinking     02:11   3,812 tok   19.4 tok/s
+ slot 2  John Smith          Problem 1    answering    01:05   2,004 tok   18.9 tok/s
+ slot 3  Alex Kim            Problem 3    waiting      00:14       0 tok   (prefill / queued)
+ slot 4  Sam Lee             Problem 2    thinking     00:48     930 tok   19.1 tok/s
+ ─────────────────────────────────────────────────────────────────────────────
+ Live thinking · slot 1 · Jane Doe · Problem 2
+   ...the last lines of the model's reasoning, updated as it streams...
+ ─────────────────────────────────────────────────────────────────────────────
+ Recent
+ 01:12:31  [John Smith] ✅ Successfully graded Problem 3
+ 01:12:33  ✅ [John Smith] Report generated: data/output/ME373_HW3_Feedback/Feedback_John_Smith.pdf
+```
+
+- `--watch-slot N` picks which slot's thinking is shown (it follows any busy slot when that one is idle).
+- Every thinking trace is also written to `debug/<student>/<problem>/thinking.txt` as it streams, so
+  `tail -f` works on any problem in progress.
+- Everything the dashboard shows under "Recent" is kept in `grading_run.log` in the output folder.
+- `--no-dashboard` prints plain log lines plus a status line every minute instead. This is automatic
+  when output is not a terminal (e.g. `nohup` or piping to a file).
+- A slot stuck on `waiting` for a long time usually means the server allows fewer parallel
+  requests than `concurrency` (see Parallel Grading).
+
+### Stopping and Resuming
+
+Ctrl-C stops a run within a second. Students whose reports were already generated are
+finished. Each problem that finished grading is saved to `debug/<student>/<problem>/result.json`,
+so running `grade.py` again grades only what is left. A saved result is reused only if the model,
+its options, the subject, the rubric, the reference solution and the student's text are all
+unchanged; otherwise the problem is graded again. `--regrade` always grades from scratch.
+Set `resume_partial: false` to turn reuse off.
 
 ### Incremental Grading
 
@@ -291,6 +368,7 @@ data/output/MyAssignment_Feedback/
 ├── Feedback_John_Smith.pdf
 ├── Feedback_John_Smith_v2.pdf         # Versioned (student resubmitted)
 ├── grading_metadata.yaml              # Submission tracking
+├── grading_run.log                    # Log of parallel runs (concurrency > 1)
 ├── failed_submissions.yaml            # Failed grading attempts (if any)
 ├── logs/
 │   ├── Feedback_Jane_Doe.tex          # LaTeX source of feedback
@@ -300,8 +378,10 @@ data/output/MyAssignment_Feedback/
         └── Problem_1_a/
             ├── prompt.txt             # Full prompt sent to LLM
             ├── response.txt           # Raw LLM response
-            ├── thinking.txt           # Extracted <think> content
+            ├── thinking.txt           # Model reasoning, written as it streams
             ├── extracted_json.txt     # Parsed JSON
+            ├── score_validation.txt   # Corrections/notes from checking scores against the rubric
+            ├── result.json            # Saved grade, reused if a stopped run is restarted
             └── SECURITY_FLAG.txt      # Created if injection detected
 ```
 

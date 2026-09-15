@@ -17,6 +17,10 @@
 import yaml
 import re
 import sys
+import json
+import time
+import hashlib
+import threading
 import instructor
 import ollama
 from openai import OpenAI
@@ -25,6 +29,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 from lata.ingest import process_latex_content
 from lata.validate_and_fix_scores import normalize_criterion_name, validate_grade_items
+from lata.scheduler import GradingCancelled
 
 # -----------------------------------------------------------------------------
 # The "Contract" (Output Schema)
@@ -72,7 +77,7 @@ class ChunkGradeResult(BaseModel):
 # -----------------------------------------------------------------------------
 
 class LatexGrader:
-    def __init__(self, config_path="config.yaml", output_dir: str = "data/output"):
+    def __init__(self, config_path="config.yaml", output_dir: str = "data/output", concurrency: int = 1):
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
@@ -100,8 +105,67 @@ class LatexGrader:
         self.max_retries = error_conf.get('max_retries', 1)
         self.should_save_failed = error_conf.get('save_failed_submissions', True)
 
-        # Track failed submissions
+        # Track failed submissions (appended to from worker threads when concurrency > 1)
         self.failed_submissions = []
+        self._failed_lock = threading.Lock()
+
+        # --- Multi-slot support ---
+        # With concurrency > 1, grade_chunk runs on several threads at once. Console
+        # streaming of the thinking trace is only readable with one slot, so it is on
+        # for concurrency 1 (the original behaviour) and replaced by the progress monitor
+        # otherwise. The trace is always written to thinking.txt as it streams, so
+        # `tail -f .../thinking.txt` works for any slot.
+        self.concurrency = max(1, int(concurrency))
+        self.live_output = self.concurrency == 1
+        self.monitor = None                  # scheduler.ProgressMonitor, set by grade.py
+        self.stop_event = threading.Event()
+        self._tls = threading.local()
+
+        # Native Ollama client, one per thread. It targets the same server as
+        # system.ollama_host (the OpenAI-compatible URL minus its /v1 suffix).
+        # system.timeout used to be read nowhere; it is now the client timeout, i.e. the
+        # longest the grader waits for the next bytes from the server. Server-side queueing
+        # and prefill take longer when N requests share the GPU, so it scales with N.
+        self.native_host = re.sub(r'/v1/?$', '', self.config['system']['ollama_host'].rstrip('/'))
+        self.request_timeout = float(self.config['system'].get('timeout', 600)) * self.concurrency
+
+        # Resume: each successfully graded problem is saved to result.json in its debug
+        # directory, keyed by a hash of everything that determines the grade (model,
+        # sampling options, subject, rubric, reference solution, student text). A restarted
+        # run reuses matching results instead of regrading them; any change to those inputs
+        # changes the key, so stale results are never reused.
+        self.resume_partial = self.config.get('grading', {}).get('resume_partial', True)
+
+    def set_context(self, student_label: str = ""):
+        """Tag this thread's log lines with the student being graded (multi-slot runs)."""
+        self._tls.student_label = student_label
+
+    def _log(self, msg: str):
+        label = getattr(self._tls, "student_label", "")
+        if label and self.concurrency > 1:
+            stripped = msg.lstrip()
+            indent = msg[: len(msg) - len(stripped)]
+            msg = f"{indent}[{label}] {stripped}"
+        # One write per line: print() writes the text and the newline separately, which
+        # lets lines from different slots interleave mid-line.
+        sys.stdout.write(msg + "\n")
+        sys.stdout.flush()
+
+    def _ollama_client(self):
+        client = getattr(self._tls, "ollama_client", None)
+        if client is None:
+            client = ollama.Client(host=self.native_host, timeout=self.request_timeout)
+            self._tls.ollama_client = client
+        return client
+
+    def _cache_key(self, problem_label: str, student_text: str, solution_text: str,
+                   rubric_str: str, subject: str) -> str:
+        payload = json.dumps({
+            "model": self.model, "options": self.options, "subject": subject,
+            "problem": problem_label, "rubric": rubric_str,
+            "solution": solution_text, "student": student_text,
+        }, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def save_failed_submissions_to_file(self, output_path: str = None):
         """
@@ -191,11 +255,15 @@ class LatexGrader:
     def _stream_response_with_thinking(self, messages: list, debug_dir: Path) -> Tuple[str, str]:
         """
         Streams the response from the model using Ollama's native think parameter.
-        Prints thinking content in real-time.
+        Prints thinking content in real-time (single-slot runs), writes it to
+        thinking.txt as it arrives, and reports progress to the monitor (multi-slot runs).
         Returns (thinking_content, response_content).
         """
+        if self.stop_event.is_set():
+            raise GradingCancelled()
+
         # Use native Ollama client with think=True for proper thinking separation
-        stream = ollama.chat(
+        stream = self._ollama_client().chat(
             model=self.model,
             messages=messages,
             stream=True,
@@ -203,47 +271,61 @@ class LatexGrader:
             options=self.options
         )
 
-        think_content = ""
-        response_content = ""
+        think_parts = []
+        response_parts = []
         started_thinking = False
         finished_thinking = False
+        think_file = None
+        monitor = self.monitor
 
-        for chunk in stream:
-            msg = chunk.get('message', {})
-            thinking_token = msg.get('thinking')
-            content_token = msg.get('content')
+        try:
+            for chunk in stream:
+                if self.stop_event.is_set():
+                    raise GradingCancelled()
 
-            # Handle thinking tokens
-            if thinking_token:
-                if not started_thinking:
-                    started_thinking = True
-                    print("\n   💭 Model thinking:", flush=True)
-                    print("      ", end='', flush=True)
+                msg = chunk.get('message', {})
+                thinking_token = msg.get('thinking')
+                content_token = msg.get('content')
 
-                # Print with proper indentation for newlines
-                if '\n' in thinking_token:
-                    lines = thinking_token.split('\n')
-                    for i, line in enumerate(lines):
-                        if i > 0:
-                            print(f"\n      ", end='', flush=True)
-                        print(line, end='', flush=True)
-                else:
-                    print(thinking_token, end='', flush=True)
-                think_content += thinking_token
+                # Handle thinking tokens
+                if thinking_token:
+                    if think_file is None:
+                        think_file = open(debug_dir / "thinking.txt", "w")
+                    think_file.write(thinking_token)
+                    think_file.flush()
+                    think_parts.append(thinking_token)
+                    if monitor:
+                        monitor.token("thinking", thinking_token)
 
-            # Handle content tokens
-            if content_token:
-                if started_thinking and not finished_thinking:
-                    finished_thinking = True
-                    print("\n   💭 Done thinking.\n", flush=True)
-                response_content += content_token
+                    if self.live_output:
+                        if not started_thinking:
+                            started_thinking = True
+                            print("\n   💭 Model thinking:", flush=True)
+                            print("      ", end='', flush=True)
 
-        # Save thinking content if present
-        if think_content:
-            with open(debug_dir / "thinking.txt", "w") as f:
-                f.write(think_content)
+                        # Print with proper indentation for newlines
+                        if '\n' in thinking_token:
+                            lines = thinking_token.split('\n')
+                            for i, line in enumerate(lines):
+                                if i > 0:
+                                    print(f"\n      ", end='', flush=True)
+                                print(line, end='', flush=True)
+                        else:
+                            print(thinking_token, end='', flush=True)
 
-        return think_content, response_content
+                # Handle content tokens
+                if content_token:
+                    if self.live_output and started_thinking and not finished_thinking:
+                        finished_thinking = True
+                        print("\n   💭 Done thinking.\n", flush=True)
+                    response_parts.append(content_token)
+                    if monitor:
+                        monitor.token("content", content_token)
+        finally:
+            if think_file is not None:
+                think_file.close()
+
+        return "".join(think_parts), "".join(response_parts)
 
     def _sanitize_json(self, text: str) -> str:
         """
@@ -326,10 +408,15 @@ class LatexGrader:
                    rubric_items: List[dict],
                    student_id: str,
                    retry_attempt: int = 0,
-                   previous_error: Optional[Tuple[str, str]] = None) -> List[GradeItem]:
+                   previous_error: Optional[Tuple[str, str]] = None,
+                   use_cache: bool = True) -> List[GradeItem]:
         """
         Grades a SINGLE problem (e.g. "Problem 1") against its specific rubric items.
+
+        use_cache: reuse a result.json saved by an earlier run when its inputs are
+        unchanged (see resume_partial). Pass False to force a fresh grade (--regrade).
         """
+        self._tls.last_from_cache = False
         
         # 1. Format the Rubric for this chunk into a string
         # rubric_items is a list of sub-problems (1a, 1b...)
@@ -463,12 +550,27 @@ class LatexGrader:
         debug_dir = self.debug_dir / student_id / safe_label
         debug_dir.mkdir(parents=True, exist_ok=True)
 
+        # Resume: reuse this problem's result from an earlier run if nothing that
+        # determines the grade has changed since.
+        cache_key = self._cache_key(problem_label, student_text, solution_text, rubric_str, subject)
+        result_path = debug_dir / "result.json"
+        if use_cache and self.resume_partial and retry_attempt == 0 and result_path.exists():
+            try:
+                saved = json.loads(result_path.read_text())
+                if saved.get("key") == cache_key:
+                    items = [GradeItem(**item) for item in saved["items"]]
+                    self._tls.last_from_cache = True
+                    self._log(f"   ♻️  Reusing {problem_label} graded in a previous run")
+                    return items
+            except Exception as e:
+                self._log(f"   ⚠️  Ignoring unreadable saved result for {problem_label}: {e}")
+
         with open(debug_dir / "prompt.txt", "w") as f:
             f.write(system_prompt + "\n\n" + user_prompt)
 
         try:
             retry_suffix = f" (Retry {retry_attempt}/{self.max_retries})" if retry_attempt > 0 else ""
-            print(f"   🧠 Grading {problem_label}{retry_suffix}...")
+            self._log(f"   🧠 Grading {problem_label}{retry_suffix}...")
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -487,12 +589,15 @@ class LatexGrader:
 
                 text_after_think = response_content
             else:
+                if self.stop_event.is_set():
+                    raise GradingCancelled()
                 response = self.raw_client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=self.options.get('temperature', 0.1),
                     response_format={"type": "json"},
-                    extra_body={"options": self.options}
+                    extra_body={"options": self.options},
+                    timeout=self.request_timeout
                 )
                 raw_text = response.choices[0].message.content
 
@@ -529,7 +634,7 @@ class LatexGrader:
 
             # Flag 1: Perfect score (uncommon, worth checking)
             if total_score == max_possible and max_possible > 0:
-                print(f"   ⚠️  Perfect score detected for {problem_label}. Review recommended.")
+                self._log(f"   ⚠️  Perfect score detected for {problem_label}. Review recommended.")
 
             # Flag 2: Check if audit_reasoning contains injection-like phrases
             injection_keywords = [
@@ -542,9 +647,9 @@ class LatexGrader:
                 audit_lower = item.audit_reasoning.lower()
                 for keyword in injection_keywords:
                     if keyword in audit_lower:
-                        print(f"   🚨 SECURITY: Potential injection detected in {problem_label}")
-                        print(f"      Keyword: '{keyword}' found in audit reasoning")
-                        print(f"      Review: data/debug/{student_id}/{safe_label}/response.txt")
+                        self._log(f"   🚨 SECURITY: Potential injection detected in {problem_label}")
+                        self._log(f"      Keyword: '{keyword}' found in audit reasoning")
+                        self._log(f"      Review: {debug_dir / 'response.txt'}")
                         # Save a security flag file
                         with open(debug_dir / "SECURITY_FLAG.txt", "w") as f:
                             f.write(f"Potential prompt injection detected!\n")
@@ -582,22 +687,35 @@ class LatexGrader:
                         f.write(f"[{kind}] {msg}\n")
                 n_fix = sum(1 for kind, _ in findings if kind == 'fix')
                 n_note = len(findings) - n_fix
-                print(f"   🔍 Score validation for {problem_label}: {n_fix} fix(es), {n_note} note(s) "
-                      f"(see score_validation.txt)")
+                self._log(f"   🔍 Score validation for {problem_label}: {n_fix} fix(es), {n_note} note(s) "
+                          f"(see score_validation.txt)")
                 for kind, msg in findings:
                     if kind == 'fix':
-                        print(f"      • {msg}")
+                        self._log(f"      • {msg}")
+
+            # Save for resume (see resume_partial)
+            try:
+                result_path.write_text(json.dumps({
+                    "key": cache_key,
+                    "model": self.model,
+                    "graded_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "items": [item.model_dump() for item in result.items],
+                }, indent=2))
+            except OSError as e:
+                self._log(f"   ⚠️  Could not save result for resume: {e}")
 
             if extra_credit_count > 0:
-                print(f"   ✅ Successfully graded {problem_label} ({extra_credit_count} extra credit items tagged)")
+                self._log(f"   ✅ Successfully graded {problem_label} ({extra_credit_count} extra credit items tagged)")
             else:
-                print(f"   ✅ Successfully graded {problem_label}")
+                self._log(f"   ✅ Successfully graded {problem_label}")
             return result.items
 
+        except GradingCancelled:
+            raise
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
-            print(f"   ❌ Failed to grade {problem_label}: {error_msg}")
+            self._log(f"   ❌ Failed to grade {problem_label}: {error_msg}")
 
             # Save error details
             error_filename = f"error_attempt_{retry_attempt}.txt" if retry_attempt > 0 else "error.txt"
@@ -614,7 +732,9 @@ class LatexGrader:
             )
 
             if should_retry:
-                print(f"   🔄 Retrying {problem_label}...")
+                self._log(f"   🔄 Retrying {problem_label}...")
+                if self.monitor:
+                    self.monitor.phase("waiting")
                 return self.grade_chunk(
                     problem_label=problem_label,
                     student_text=student_text,
@@ -622,18 +742,20 @@ class LatexGrader:
                     rubric_items=rubric_items,
                     student_id=student_id,
                     retry_attempt=retry_attempt + 1,
-                    previous_error=(error_type, error_msg)
+                    previous_error=(error_type, error_msg),
+                    use_cache=use_cache
                 )
             else:
                 # Record failed submission
                 if self.should_save_failed:
-                    self.failed_submissions.append({
-                        'student_id': student_id,
-                        'problem_label': problem_label,
-                        'error_type': error_type,
-                        'error_msg': error_msg,
-                        'attempts': retry_attempt + 1
-                    })
+                    with self._failed_lock:
+                        self.failed_submissions.append({
+                            'student_id': student_id,
+                            'problem_label': problem_label,
+                            'error_type': error_type,
+                            'error_msg': error_msg,
+                            'attempts': retry_attempt + 1
+                        })
 
                 # Return empty list so we don't crash the whole student
                 return []

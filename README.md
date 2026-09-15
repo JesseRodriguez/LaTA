@@ -47,6 +47,7 @@ After grading, post-processing tools handle TA workload splitting, feedback audi
 - **Corrections workflow** -- Re-grade student corrections against the same rubric while preserving original extra credit scores.
 - **Post-grading tools** -- Automated feedback auditing, TA workload splitting, and email distribution (SMTP or macOS Mail.app via AppleScript).
 - **Incremental grading** -- Skip previously graded students; grade new and late submissions without redoing work.
+- **Parallel grading** -- Grade several problems at once against a multi-slot LLM server, with a live terminal dashboard (per-slot progress, throughput, ETA, live reasoning). Stopped runs resume without regrading finished problems.
 - **Gradescope autograder** -- Companion validator that runs on Gradescope to check student `.tex` submissions for structural issues before they reach LaTA.
 
 ---
@@ -58,7 +59,7 @@ LaTA has been developed and tested at scale in production for the ME 373 (Numeri
 - **Hardware**: Apple Mac Studio, M3 Ultra, 256 GB unified memory
 - **Grading model**: `gpt-oss:120b` (120-billion-parameter open-source reasoning model, served via Ollama)
 - **Segmentation model**: `gpt-oss:20b`
-- **Throughput**: Approximately one problem per minute per student (wall-clock, including LLM inference, LaTeX compilation, and error recovery)
+- **Throughput**: Approximately one problem per minute (wall-clock, including LLM inference, LaTeX compilation, and error recovery) grading one problem at a time; about 1.5x faster with `concurrency: 4` and `OLLAMA_NUM_PARALLEL=4` (see [Getting Started](docs/GETTING_STARTED.md#parallel-grading))
 - **Scale**: 8 homework assignments, approximately 180 students each, with 2--6 problems per assignment
 
 Other models (DeepSeek-R1:14b, QwQ:32b, Llama 3.1:8b) have been tested on smaller subsets and work with LaTA, but `gpt-oss:120b` is the only model that has been validated end-to-end at full class scale.
@@ -97,6 +98,7 @@ cp config.example.yaml config.yaml
 # 4. Grade
 uv run python grade.py                          # Grade all students
 uv run python grade.py --student "Jane Doe"     # Test on one student first
+uv run python grade.py --concurrency 4          # Grade 4 problems at a time (live dashboard)
 
 # 5. Post-process
 uv run python post_grading.py audit             # Check for grading issues

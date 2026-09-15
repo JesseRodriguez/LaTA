@@ -41,7 +41,10 @@ system:
       presence_penalty: 0.2       # Slight penalty for any repeated token
 
   # Global safety settings
-  timeout: 600                    # Max time per LLM call (seconds)
+  # Longest wait (seconds) for the next bytes from the LLM server before a request fails.
+  # Multiplied by grading.concurrency, since prefill and queueing take longer when several
+  # requests share the GPU.
+  timeout: 600
 
 # File and directory paths
 paths:
@@ -73,6 +76,19 @@ grading:
   # This allows you to grade early submissions overnight, then grade late submissions in the morning
   # without redoing work. If a student resubmits, a versioned report (e.g., _v2.pdf) is created.
   skip_previously_graded: true
+
+  # Parallel grading: how many problems are graded at the same time.
+  # The LLM server must allow at least this many requests at once, or the extra ones just
+  # wait in line. For Ollama, set OLLAMA_NUM_PARALLEL >= concurrency and restart Ollama
+  # (macOS: `launchctl setenv OLLAMA_NUM_PARALLEL 4`). Measured with gpt-oss:120b on an
+  # M3 Ultra: 1 -> 49.6 tok/s, 2 -> 63.0, 4 -> 76.6, 8 -> 73.2 (gains stop near 4).
+  # With concurrency > 1 the terminal shows a live progress dashboard; see docs/GETTING_STARTED.md.
+  concurrency: 1
+
+  # Resume: reuse problems already graded by a run that was stopped (Ctrl-C) or crashed.
+  # A saved result is only reused if the model, options, rubric, reference solution and
+  # student text are all unchanged. --regrade always grades from scratch.
+  resume_partial: true
 
   # Late penalty configuration
   late_penalties:
@@ -219,6 +235,7 @@ email:
 # ------------------------------------------------------------------------------------
 #
 # Problem: Grading is too slow
+#   - Grade several problems at once: raise grading.concurrency (and OLLAMA_NUM_PARALLEL)
 #   - Use a smaller/faster model for grader (e.g., deepseek-r1:14b instead of :32b)
 #   - Reduce num_ctx if your problems are short
 #   - Check Ollama GPU utilization
