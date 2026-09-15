@@ -1033,6 +1033,13 @@ def audit_reports(config_path: str = "config.yaml"):
             )
 
             # === CHECK 2: Rubric item name matching ===
+            # Build a set of all valid rubric names (cleaned) across all sections
+            # so we can distinguish cross-section name reuse from actual bleed
+            all_rubric_names_clean = set()
+            for section_data in rubric_ref.values():
+                for rn in section_data['names']:
+                    all_rubric_names_clean.add(rn.strip().rstrip('.'))
+
             # Reverse the LaTeX escaping to compare with rubric names
             for item_name_escaped, pts_str in all_items:
                 # Reverse common LaTeX escapes
@@ -1061,11 +1068,15 @@ def audit_reports(config_path: str = "config.yaml"):
                         # Check if rubric name starts with the item name (or vice versa)
                         # This catches cases where the LLM appended the description
                         if rubric_name_clean.startswith(item_name_clean) or item_name_clean.startswith(rubric_name_clean):
-                            # If item_name is significantly longer, it's description bleed
+                            # If item_name is significantly longer, it might be description bleed.
+                            # But first check: does the item_name exactly match a rubric item
+                            # from a DIFFERENT section? If so, the LLM just used a name from
+                            # another sub-part (common when sections share similar criteria).
                             if len(item_name_clean) > len(rubric_name_clean) * 1.3:
-                                flag(student_name, f"Criterion name bleed in '{section_title}': "
-                                     f"'{item_name_clean[:120]}...' (rubric: '{rubric_name_clean[:120]}...')")
-                                name_mismatch_count += 1
+                                if item_name_clean not in all_rubric_names_clean:
+                                    flag(student_name, f"Criterion name bleed in '{section_title}': "
+                                         f"'{item_name_clean[:120]}...' (rubric: '{rubric_name_clean[:120]}...')")
+                                    name_mismatch_count += 1
                             found_match = True
                             break
 
@@ -1076,6 +1087,10 @@ def audit_reports(config_path: str = "config.yaml"):
                     # In corrections mode, "Original Extra Credit (preserved)" is a
                     # legitimate synthetic criterion used to carry forward EC scores
                     if is_corrections_mode and "Original Extra Credit" in item_name_clean:
+                        continue
+                    # Last check: item_name might exactly match a rubric item from any section
+                    # (the loop above may not have reached it due to prefix match short-circuit)
+                    if item_name_clean in all_rubric_names_clean:
                         continue
                     # No match at all - LLM fabricated a criterion
                     flag(student_name, f"Fabricated/unknown criterion: '{item_name_clean[:80]}'")
