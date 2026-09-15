@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Tuple
 from pathlib import Path
 from lata.ingest import process_latex_content
+from lata.validate_and_fix_scores import normalize_criterion_name, validate_grade_items
 
 # -----------------------------------------------------------------------------
 # The "Contract" (Output Schema)
@@ -553,30 +554,8 @@ class LatexGrader:
                         break
 
             # Post-process: Tag items as extra credit based on original rubric
-            # Build a mapping of (title, item_name) -> is_extra_credit
-            # Normalize criterion names to handle LLM variations (punctuation, apostrophes, extra text)
-            def normalize_criterion_name(name: str) -> str:
-                """Normalize criterion name for fuzzy matching.
-
-                Handles:
-                - Trailing punctuation (periods, commas, etc.)
-                - Multiple apostrophes in f_j', f_j'', f_j''', etc. -> f_j'
-                - Extra descriptive text appended by LLM
-                """
-                # Strip trailing punctuation
-                normalized = name.rstrip('.!?;:,').strip()
-
-                # Normalize apostrophes: replace multiple apostrophes with single apostrophe
-                # This handles f_j' vs f_j'' vs f_j''' variations from the LLM
-                import re
-                normalized = re.sub(r"f_j''+", "f_j'", normalized)
-
-                # Remove common LLM additions like "and state that..." or "and stated that..."
-                # These appear when LLM tries to be helpful by adding description details
-                normalized = re.sub(r'\s+and\s+(state|stated)\s+that.*$', '', normalized, flags=re.IGNORECASE)
-
-                return normalized
-
+            # Build a mapping of (title, item_name) -> is_extra_credit, matching on
+            # normalized criterion names to absorb LLM punctuation/wording variations
             extra_credit_map = {}
             for sub_problem in rubric_items:
                 title = sub_problem.get('title', '')
@@ -594,6 +573,20 @@ class LatexGrader:
                 grade_item.is_extra_credit = extra_credit_map.get(key, False)
                 if grade_item.is_extra_credit:
                     extra_credit_count += 1
+
+            # Validate scores against the rubric before anything downstream totals them
+            findings = validate_grade_items(result.items, rubric_items)
+            if findings:
+                with open(debug_dir / "score_validation.txt", "w") as f:
+                    for kind, msg in findings:
+                        f.write(f"[{kind}] {msg}\n")
+                n_fix = sum(1 for kind, _ in findings if kind == 'fix')
+                n_note = len(findings) - n_fix
+                print(f"   🔍 Score validation for {problem_label}: {n_fix} fix(es), {n_note} note(s) "
+                      f"(see score_validation.txt)")
+                for kind, msg in findings:
+                    if kind == 'fix':
+                        print(f"      • {msg}")
 
             if extra_credit_count > 0:
                 print(f"   ✅ Successfully graded {problem_label} ({extra_credit_count} extra credit items tagged)")

@@ -24,7 +24,6 @@ import jinja2
 from openai import OpenAI
 
 # Import validation module
-from .validate_and_fix_scores import validate_and_fix_before_compilation
 
 class LatexReporter:
     # LaTeX auxiliary file extensions to clean up
@@ -908,23 +907,6 @@ class LatexReporter:
             context['is_corrections_mode'] = self.is_corrections_mode
 
             tex_content = template.render(context)
-
-        # Validate and fix scores before compilation
-        # Determine rubric path based on config
-        config_dir = self.config_path.parent
-        rubric_name = self.config.get('grading', {}).get('rubric_file')
-        if rubric_name:
-            rubric_path = config_dir / 'rubrics' / rubric_name
-        else:
-            # Fallback: try to infer from config path
-            rubric_path = config_dir / 'rubrics' / 'rubric.yaml'
-
-        if rubric_path.exists():
-            try:
-                tex_content, had_issues = validate_and_fix_before_compilation(tex_content, rubric_path)
-            except Exception as e:
-                print(f"   ⚠️  Score validation failed: {e}")
-                # Continue with original content
 
         with open(tex_path, "w") as f:
             f.write(tex_content)
