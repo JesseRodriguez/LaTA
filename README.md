@@ -86,8 +86,8 @@ uv sync
 ### Five-Step Workflow
 
 ```bash
-# 1. Download and unzip Gradescope submissions into data/input/
-#    Expected: data/input/MyAssignment/submission_XXXXXX/*.tex
+# 1. Download the Gradescope export(s) and drop the .zip files in data/input/inbox/
+#    (no unzipping or renaming; grade.py unpacks them, and re-exports merge)
 
 # 2. Create your rubric YAML and reference solution
 #    See data/rubrics/example_rubric.yaml for the format

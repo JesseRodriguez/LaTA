@@ -27,6 +27,10 @@ venv/
 # Input data (student submissions from Gradescope)
 data/input/*
 !data/input/.gitkeep
+# Keep the inbox folder itself (Gradescope .zip exports are dropped here), not its contents
+!data/input/inbox
+data/input/inbox/*
+!data/input/inbox/.gitkeep
 
 # Output data (generated PDFs, logs, debug files - all in assignment-specific folders)
 data/output/*

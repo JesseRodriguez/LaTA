@@ -88,8 +88,13 @@ system:
 
 # File and directory paths
 paths:
-  # Input: Gradescope export directory (unzipped folder from Gradescope download)
+  # Input: where submissions end up after unpacking
   export_dir: "data/input/Assignment1_Export"
+
+  # Inbox: drop Gradescope's .zip exports here and grade.py unpacks them into export_dir --
+  # no unzipping, no renaming, and re-exports after late submissions just merge.
+  # Both assignments go here: the .tex export, and the .pdf export if late penalties use it.
+  inbox: "data/input/inbox"
 
   # Rubric: YAML file defining grading criteria (relative to rubrics_dir)
   rubric_file: "assignment1_rubric.yaml"

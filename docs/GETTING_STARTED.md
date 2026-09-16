@@ -77,9 +77,26 @@ pdflatex --version
 1. Log into Gradescope.
 2. Navigate to your assignment.
 3. Click "Download Submissions" and select "Download All Submissions."
-4. Unzip the downloaded file.
-5. Place the unzipped folder in `data/input/`.
+4. Drop the `.zip` straight into `data/input/inbox/` -- do not unzip or rename it.
+5. Do the same for the `.pdf` assignment's export, if you use one for late penalties.
 
+```
+data/input/inbox/
+├── ME373_HW3_submissions.zip          # the .tex assignment
+└── ME373_HW3_pdf_submissions.zip      # the .pdf assignment (submission times only)
+```
+
+`grade.py` unpacks these before it grades. It tells the two apart by what is inside them,
+so the order you download them in does not matter, and it keeps only the metadata from the
+PDF export, since the pipeline uses the PDFs for nothing but their submission times.
+
+Re-exporting after late submissions works the same way: drop the new `.zip` in and it merges
+with what is already there (students are never dropped by a partial export), then the grader
+skips whoever it has already finished. Archives already unpacked are ignored, so running
+twice costs nothing.
+
+To skip the inbox and lay the files out yourself, unzip into `data/input/<YourAssignment>/`
+and rename the PDF export's `submission_metadata.yml` to `pdf_submission_metadata.yml`.
 The expected structure is:
 
 ```
@@ -166,6 +183,7 @@ Edit `config.yaml` to match your assignment. The minimum fields to change are:
 ```yaml
 paths:
   export_dir: "data/input/YourAssignment"
+  inbox: "data/input/inbox"          # Gradescope .zip exports are unpacked from here
   rubric_file: "your_rubric.yaml"
   solution_file: "data/solutions/your_solution.tex"
 

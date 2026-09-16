@@ -28,6 +28,7 @@ from lata.grader import LatexGrader, GradeResult, GradeItem
 from lata.reporter import LatexReporter
 from lata.scheduler import ProblemJob, StudentPlan, ProgressMonitor, GradingCancelled, run_jobs
 from lata.serving import prepare_grader
+from lata.inbox import prepare_from_inbox
 
 def main():
     parser = argparse.ArgumentParser()
@@ -39,6 +40,9 @@ def main():
     )
     parser.add_argument("--config", type=str, default="config.yaml",
                         help="Path to the configuration file (default: config.yaml)")
+    parser.add_argument("--inbox", type=str, default=None,
+                        help="Folder holding Gradescope export .zip files to unpack before "
+                             "grading (overrides paths.inbox; default data/input/inbox)")
     parser.add_argument("--concurrency", type=int, default=None,
                         help="Grading requests to run in parallel (overrides grading.concurrency). "
                              "The LLM server must allow at least this many: for Ollama set "
@@ -58,15 +62,22 @@ def main():
     concurrency = args.concurrency if args.concurrency is not None else config.get('grading', {}).get('concurrency', 1)
     concurrency = max(1, int(concurrency))
 
-    # Check for required PDF metadata file
+    # Unpack anything waiting in the inbox: the Gradescope .zip exports go straight in,
+    # no unzipping or renaming by hand
     export_dir = Path(config['paths']['export_dir'])
+    inbox_dir = args.inbox or config.get('paths', {}).get('inbox', 'data/input/inbox')
+    prepare_from_inbox(inbox_dir, export_dir)
+
+    # Check for required PDF metadata file
     pdf_metadata_path = export_dir / 'pdf_submission_metadata.yml'
 
     if not pdf_metadata_path.exists():
         print(f"❌ ERROR: PDF submission metadata not found!")
         print(f"   Expected: {pdf_metadata_path}")
         print(f"   This file is required for accurate timestamp tracking and versioning.")
-        print(f"   Please ensure you have downloaded the complete Gradescope export.")
+        print(f"   Late penalties use the later of the .tex and .pdf submission times.")
+        print(f"   Drop the .pdf assignment's Gradescope export into {inbox_dir}/, or place")
+        print(f"   its submission_metadata.yml at the path above.")
         return
 
     rubric_path = Path(config['paths']['rubrics_dir']) / config['paths']['rubric_file']
