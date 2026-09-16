@@ -21,9 +21,29 @@ system:
       num_predict: 16384          # Max output length
       stop: ["```json", "```"]    # Stop tokens (prevents chatting after JSON)
 
+  # Where to look for GGUF models (only needed if you keep them somewhere unusual).
+  # Default: ~/models, ~/gguf, ~/.cache/lm-studio/models
+  # model_dirs: ["~/models"]
+  #
+  # Path to llama-server, if it is not on PATH or at ~/llama.cpp/build/bin/llama-server.
+  # llama_server: "~/llama.cpp/build/bin/llama-server"
+
   # --- WORKER 2: THE GRADER ---
   # Role: Compare student work against reference solution and rubric
   # Needs: Strong reasoning, large context window
+  #
+  # SIMPLEST FORM -- name the model and let LaTA sort out the rest:
+  #
+  #   grader:
+  #     model: "qwen3.8-next"
+  #
+  # The name is matched (loosely, ignoring case, punctuation and version numbers) against
+  # the models Ollama has pulled and the GGUF files in model_dirs. If several match, LaTA
+  # lists them and stops. An Ollama model is used through Ollama; a GGUF gets its own
+  # llama-server, started with one slot per grading worker and stopped when the run ends,
+  # with settings chosen from the architecture recorded in the GGUF itself.
+  #
+  # The explicit form below still works, and wins if both are present.
   grader:
     model_name: "deepseek-r1:14b"  # Recommended: deepseek-r1:14b, qwen-qwq:32b, or gpt-oss:120b
     is_reasoning_model: true        # Set to TRUE for models with <think> tags (DeepSeek-R1, QwQ, etc.)

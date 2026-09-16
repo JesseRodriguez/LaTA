@@ -39,9 +39,12 @@ class SegmentationResult(BaseModel):
 # -----------------------------------------------------------------------------
 
 class LatexSegmenter:
-    def __init__(self, config_path="config.yaml"):
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+    def __init__(self, config_path="config.yaml", config: dict = None):
+        if config is not None:
+            self.config = config
+        else:
+            with open(config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
             
         # Initialize LLM Client (Lazy load or init here)
         # We init here so it's ready for the fallback

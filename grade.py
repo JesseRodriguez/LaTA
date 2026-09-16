@@ -27,6 +27,7 @@ from lata.segmenter import LatexSegmenter
 from lata.grader import LatexGrader, GradeResult, GradeItem
 from lata.reporter import LatexReporter
 from lata.scheduler import ProblemJob, StudentPlan, ProgressMonitor, GradingCancelled, run_jobs
+from lata.serving import prepare_grader
 
 def main():
     parser = argparse.ArgumentParser()
@@ -121,15 +122,23 @@ def main():
         print()
 
     # 3. Initialize Workers
+    # The grading model is resolved and served later, once we know there is work for it.
     output_dir = f"data/output/{assignment_name}_Feedback"
-    segmenter = LatexSegmenter(config_path=config_path)
-    grader = LatexGrader(config_path=config_path, output_dir=output_dir, concurrency=concurrency)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    segmenter = LatexSegmenter(config_path=config_path, config=config)
     reporter = LatexReporter(
         output_dir=output_dir,
         config_path=config_path,
+        config=config,
         is_corrections_mode=is_corrections_mode,
         base_assignment=base_assignment if is_corrections_mode else None
     )
+    _run(args, config, config_path, concurrency, output_dir, full_rubric, assignment_name,
+         is_corrections_mode, segmenter, reporter)
+
+
+def _run(args, config, config_path, concurrency, output_dir, full_rubric, assignment_name,
+         is_corrections_mode, segmenter, reporter):
 
     # 4. Process Reference Solution (Segment it!)
     print("🔹 Segmenting Reference Solution...")
@@ -242,10 +251,28 @@ def main():
 
     total_problems = sum(len(p.jobs) for p in plans)
     if not plans:
+        # Nothing to do: never load a model just to find that out
         print("\nNothing to grade.")
-        grader.save_failed_submissions_to_file()
         return
 
+    # Resolve the grading model now that there is work, and serve it if it is a local GGUF
+    try:
+        server = prepare_grader(config, concurrency, log_dir=Path(output_dir))
+    except RuntimeError as e:
+        print(f"\n❌ {e}")
+        return
+    try:
+        grader = LatexGrader(config_path=config_path, output_dir=output_dir,
+                             concurrency=concurrency, config=config)
+        _grade_and_report(args, config, concurrency, output_dir, plans, total_problems,
+                          assignment_name, grader, reporter)
+    finally:
+        if server is not None:
+            server.stop()
+
+
+def _grade_and_report(args, config, concurrency, output_dir, plans, total_problems,
+                      assignment_name, grader, reporter):
     print(f"\n📋 {len(plans)} student(s), {total_problems} problem(s) to grade "
           f"with {concurrency} slot{'s' if concurrency != 1 else ''}")
     if concurrency > 1:

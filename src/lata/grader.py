@@ -77,9 +77,15 @@ class ChunkGradeResult(BaseModel):
 # -----------------------------------------------------------------------------
 
 class LatexGrader:
-    def __init__(self, config_path="config.yaml", output_dir: str = "data/output", concurrency: int = 1):
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+    def __init__(self, config_path="config.yaml", output_dir: str = "data/output", concurrency: int = 1,
+                 config: dict = None):
+        # `config` lets the caller pass a config it has already loaded and adjusted --
+        # grade.py resolves system.grader.model to a real endpoint before constructing us.
+        if config is not None:
+            self.config = config
+        else:
+            with open(config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
 
         # Store output directory for debug and failed submissions
         self.output_dir = Path(output_dir)

@@ -210,6 +210,47 @@ system:
                                              # server; multiplied by grading.concurrency
 ```
 
+### Choosing the Grading Model
+
+The short form is a name:
+
+```yaml
+system:
+  grader:
+    model: "qwen3.8-next"     # or "gpt-oss:120b", or just "qwen"
+```
+
+LaTA matches that against the models Ollama has pulled and the GGUF files in `model_dirs`,
+ignoring case, punctuation and version numbers -- `qwen`, `Qwen3.8-Flash-Next` and even a
+misremembered `132B-Flash-Next` all find the same model. If the name matches more than one,
+LaTA lists the candidates and stops rather than guessing.
+
+- **An Ollama model** is used through Ollama, exactly as before.
+- **A GGUF file** gets its own `llama-server`, started when the run begins with one slot per
+  grading worker, and stopped when the run ends (including on Ctrl-C). Its log is written to
+  `llama_server.log` in the assignment's output folder.
+
+Settings that depend on the model rather than on you are chosen from the architecture stored
+in the GGUF header, so they are right even if the file has been renamed: the context size per
+slot, and things like Qwen3.8-Next needing `reasoning_effort: low` and no reasoning budget, or
+DeepSeek V4-Flash needing its thinking capped. Anything you set yourself always wins.
+
+```yaml
+system:
+  model_dirs: ["~/models"]                              # where GGUF files live
+  llama_server: "~/llama.cpp/build/bin/llama-server"    # if not on PATH
+  grader:
+    model: "qwen"
+    ctx_per_slot: 32768        # optional override
+    server_args: []            # optional extra llama-server flags
+```
+
+Then just:
+
+```bash
+uv run python grade.py --concurrency 4
+```
+
 ### Parallel Grading
 
 ```yaml

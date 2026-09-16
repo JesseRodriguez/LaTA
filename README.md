@@ -37,7 +37,8 @@ After grading, post-processing tools handle TA workload splitting, feedback audi
 
 ## Key Features
 
-- **Fully local inference** -- All LLM calls go to a locally running Ollama instance. No student data leaves your machine.
+- **Fully local inference** -- All LLM calls go to a local model server. No student data leaves your machine.
+- **Name a model, and it is served** -- Point `grader.model` at an Ollama model or a GGUF file; GGUF models get their own `llama-server` started and stopped around the run, configured from the architecture in the file.
 - **Reasoning model support** -- Native support for `<think>`-tag models (DeepSeek-R1, QwQ, GPT-OSS) with automatic chain-of-thought extraction.
 - **Chunk-based grading** -- Each problem is graded independently for better accuracy and debuggability.
 - **Dual feedback** -- Internal instructor audit notes (what the LLM actually saw) and student-facing Socratic hints (guiding without giving answers).

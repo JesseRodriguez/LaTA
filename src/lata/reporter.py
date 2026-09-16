@@ -29,7 +29,7 @@ class LatexReporter:
     # LaTeX auxiliary file extensions to clean up
     LATEX_AUX_EXTENSIONS = ['.aux', '.log', '.out', '.toc', '.lof', '.lot', '.fls', '.fdb_latexmk', '.synctex.gz']
 
-    def __init__(self, template_dir="templates", output_dir="data/output", config_path="config.yaml", is_corrections_mode=False, base_assignment=None):
+    def __init__(self, template_dir="templates", output_dir="data/output", config_path="config.yaml", is_corrections_mode=False, base_assignment=None, config: dict = None):
         self.template_dir = Path(template_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -53,8 +53,11 @@ class LatexReporter:
 
         # Load configuration
         self.config_path = Path(config_path)
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        if config is not None:
+            self.config = config
+        else:
+            with open(config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
 
         # Error handling configuration
         error_conf = self.config.get('grading', {}).get('error_handling', {})
