@@ -285,6 +285,24 @@ Delivery status is saved to `data/output/<AssignmentName>_Feedback/email_deliver
 On subsequent runs, students already marked as delivered are skipped unless
 `--force-resend` is passed.
 
+### Students Missing a .tex File
+
+A student who submitted to the .pdf assignment but has no gradable .tex file -- they
+never submitted to the .tex assignment, or submitted something other than a .tex file
+to it -- is skipped by the grader and so has no feedback PDF. `send-feedback` finds
+these students in `pdf_submission_metadata.yml` and sends them a notice (no
+attachment) saying their .tex file is missing and should be submitted as soon as
+possible to avoid a zero and further late penalties. They appear in the preview, in
+their own section, before you confirm.
+
+Notices are tracked under `missing_tex_notified` in `email_delivery.yaml`, so a later
+run (for example after a late re-export) does not resend them; a student who has since
+submitted the .tex file and been graded gets their feedback as usual. Override the
+wording with `missing_tex_subject_template` and `missing_tex_body_template` under
+`email:` (same `{assignment_name}` and `{student_name}` variables), or turn notices
+off with `--no-missing-tex-notices`. They are not sent in corrections mode, where a
+missing .tex file just means no corrections were submitted.
+
 ### Corrections Mode
 
 When the assignment name ends with `_CORRECTIONS`, the emailer operates in
@@ -304,6 +322,7 @@ python post_grading.py send-feedback [OPTIONS]
 | `--dry-run`         | off           | Simulate sending without actual emails             |
 | `--test-recipients` | (none)        | One or more email addresses to redirect all mail to |
 | `--force-resend`    | off           | Resend even if delivery was already recorded       |
+| `--no-missing-tex-notices` | off    | Don't email students who submitted a PDF but no .tex file |
 
 ### Examples
 

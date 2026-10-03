@@ -748,7 +748,8 @@ def send_feedback(config_path: str = "config.yaml",
                  username: str = None,
                  dry_run: bool = False,
                  test_recipients: List[str] = None,
-                 force_resend: bool = False):
+                 force_resend: bool = False,
+                 missing_tex_notices: bool = True):
     """
     Send feedback PDFs to students via email.
 
@@ -758,6 +759,8 @@ def send_feedback(config_path: str = "config.yaml",
         dry_run: If True, simulate sending without actual emails
         test_recipients: List of email addresses to send to (testing mode)
         force_resend: If True, resend even if already delivered
+        missing_tex_notices: If True, students who submitted a PDF but no .tex file get
+            an email saying so (they have no feedback PDF, so would otherwise get nothing)
     """
     print("=" * 80)
     print("SEND FEEDBACK EMAILS")
@@ -792,6 +795,19 @@ def send_feedback(config_path: str = "config.yaml",
     )
     ingest_result = ingestor.load()
 
+    # Students who submitted a PDF but no .tex file have no feedback PDF; tell them.
+    # Not in corrections mode: there, no .tex just means no corrections, and the
+    # original grade stands, so "submit or receive a zero" would be wrong.
+    missing_tex = []
+    if missing_tex_notices and not is_corrections_mode:
+        missing_tex = ingestor.find_pdf_only_submitters()
+        if missing_tex:
+            print(f"📭 {len(missing_tex)} student(s) submitted a PDF but no .tex file; "
+                  f"they will get a missing .tex notice instead of feedback")
+        elif not (Path(config['paths']['export_dir']) / 'pdf_submission_metadata.yml').exists():
+            print("   (No pdf_submission_metadata.yml, so students missing a .tex file "
+                  "cannot be identified)")
+
     # 3. Initialize emailer (with corrections mode info)
     emailer = FeedbackEmailer(
         config_path=config_path,
@@ -816,7 +832,8 @@ def send_feedback(config_path: str = "config.yaml",
         submissions=ingest_result.submissions,
         dry_run=dry_run,
         test_recipients=test_recipients,
-        force_resend=force_resend
+        force_resend=force_resend,
+        missing_tex=missing_tex
     )
 
     # 6. Display delivery report
@@ -833,6 +850,12 @@ def send_feedback(config_path: str = "config.yaml",
         print()
         print("Failed Deliveries:")
         for failure in report['failures']:
+            print(f"  - {failure['email']}: {failure['error']} ({failure['attempts']} attempts)")
+
+    if report['missing_tex_notified'] or report['missing_tex_failures']:
+        print(f"Missing .tex notices sent:   {report['missing_tex_notified']}")
+        print(f"Missing .tex notices failed: {len(report['missing_tex_failures'])}")
+        for failure in report['missing_tex_failures']:
             print(f"  - {failure['email']}: {failure['error']} ({failure['attempts']} attempts)")
 
     print()
@@ -1351,6 +1374,11 @@ def main():
         action='store_true',
         help='Resend even if already delivered'
     )
+    send_parser.add_argument(
+        '--no-missing-tex-notices',
+        action='store_true',
+        help="Don't email students who submitted a PDF but no .tex file"
+    )
 
     # Audit reports command
     audit_parser = subparsers.add_parser(
@@ -1376,7 +1404,8 @@ def main():
             username=args.username,
             dry_run=args.dry_run,
             test_recipients=args.test_recipients,
-            force_resend=args.force_resend
+            force_resend=args.force_resend,
+            missing_tex_notices=not args.no_missing_tex_notices
         )
     elif args.command == 'audit':
         audit_reports(config_path=args.config)

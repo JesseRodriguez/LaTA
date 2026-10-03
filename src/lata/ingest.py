@@ -295,3 +295,65 @@ class GradescopeIngestor:
             submissions=submissions,
             mapping_dataframe=pd.DataFrame(mapping_rows)
         )
+
+    def find_pdf_only_submitters(self) -> List[Dict]:
+        """Students who submitted to the .pdf assignment but have no gradable .tex file.
+
+        That is anyone in pdf_submission_metadata.yml who is not a submitter on a .tex
+        submission that actually contains a .tex file: either they never submitted to the
+        .tex assignment, or they submitted something other than a .tex file to it. load()
+        skips both silently, so without this they get no feedback and no email.
+
+        Matched by SID, then email, like the timestamp matching in load(). Returns
+        [{'name', 'email', 'sid', 'pdf_created_at', 'reason'}], one per student.
+        """
+        if not self.pdf_metadata_path.exists():
+            return []
+
+        def ids(submitter):
+            sid = str(submitter.get('sid') or '').strip()
+            email = str(submitter.get('email') or '').strip().lower()
+            return sid, email
+
+        tex_meta = {}
+        if self.metadata_path.exists():
+            with open(self.metadata_path, 'r') as f:
+                tex_meta = self._clean_ruby_yaml_keys(yaml.safe_load(f) or {})
+        with open(self.pdf_metadata_path, 'r') as f:
+            pdf_meta = self._clean_ruby_yaml_keys(yaml.safe_load(f) or {})
+
+        graded_sids, graded_emails = set(), set()     # have a .tex file
+        empty_sids, empty_emails = set(), set()       # submitted, but no .tex file in it
+        for sub_key, sub_data in tex_meta.items():
+            if not isinstance(sub_data, dict):
+                continue
+            has_tex = any((self.export_dir / sub_key).glob("*.tex"))
+            for submitter in sub_data.get('submitters') or []:
+                sid, email = ids(submitter)
+                (graded_sids if has_tex else empty_sids).add(sid)
+                (graded_emails if has_tex else empty_emails).add(email)
+        graded_sids.discard('')
+        graded_emails.discard('')
+
+        missing, seen = [], set()
+        for sub_data in pdf_meta.values():
+            if not isinstance(sub_data, dict):
+                continue
+            for submitter in sub_data.get('submitters') or []:
+                sid, email = ids(submitter)
+                if (sid and sid in graded_sids) or (email and email in graded_emails):
+                    continue
+                key = sid or email
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                submitted_other = (sid and sid in empty_sids) or (email and email in empty_emails)
+                missing.append({
+                    'name': submitter.get('name', 'Unknown'),
+                    'email': submitter.get('email', 'Unknown'),
+                    'sid': sid,
+                    'pdf_created_at': str(sub_data.get('created_at', '')),
+                    'reason': ("submission to the .tex assignment contains no .tex file"
+                               if submitted_other else "no submission to the .tex assignment"),
+                })
+        return missing

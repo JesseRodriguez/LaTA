@@ -50,6 +50,21 @@ except ImportError:
     APPLESCRIPT_AVAILABLE = False
 
 
+# Sent to students who submitted a PDF but no .tex file, so there was nothing to grade.
+# Override with email.missing_tex_subject_template / missing_tex_body_template in config.yaml.
+DEFAULT_MISSING_TEX_SUBJECT = "{assignment_name}: your .tex file is missing"
+DEFAULT_MISSING_TEX_BODY = """Hello {student_name},
+
+We received your PDF submission for {assignment_name}, but no matching .tex file was submitted to the LaTeX assignment on Gradescope, so your work could not be graded.
+
+Please submit your .tex file as soon as possible. Without it you will receive a zero on this assignment, and late penalties will continue to accrue until it is submitted.
+
+If you believe you already submitted it, please contact your instructor or TA.
+
+Best regards,
+LaTA Grading System"""
+
+
 class FeedbackEmailer:
     """
     Handles sending feedback PDFs to students via SMTP.
@@ -106,6 +121,10 @@ class FeedbackEmailer:
         )
         self.from_name = self.email_config.get('from_name', 'LaTA Grading System')
         self.body_template = self.email_config.get('body_template', '')
+        self.missing_tex_subject_template = self.email_config.get(
+            'missing_tex_subject_template', DEFAULT_MISSING_TEX_SUBJECT)
+        self.missing_tex_body_template = self.email_config.get(
+            'missing_tex_body_template', DEFAULT_MISSING_TEX_BODY)
 
         # Error handling settings
         self.max_retries = self.email_config.get('max_retries', 3)
@@ -593,7 +612,70 @@ LaTA Grading System"""
                 )
                 return False
 
-    def _show_email_preview_and_confirm(self, pdf_matches: List[Tuple]) -> None:
+    def send_missing_tex_notice(self, student: Dict, dry_run: bool = False) -> bool:
+        """Tell a student who submitted a PDF but no .tex file that nothing could be graded.
+
+        `student` is an entry from GradescopeIngestor.find_pdf_only_submitters(). No
+        attachment. Tracked under missing_tex_notified in email_delivery.yaml, apart from
+        feedback deliveries, so a later run neither resends it nor counts it as feedback.
+        """
+        name, email = student['name'], student['email']
+        key = name.replace(" ", "_").replace("(", "").replace(")", "")
+        notified = self.delivery_data.setdefault('missing_tex_notified', {})
+        failed = self.delivery_data.setdefault('missing_tex_failed', {})
+
+        if not self._validate_email(email):
+            print(f"❌ {name}: Invalid email address '{email}' (missing .tex notice)")
+            failed[key] = {'email': email, 'attempts': 1, 'last_error': "Invalid email address format"}
+            self._save_delivery_tracking()
+            return False
+
+        if dry_run:
+            print(f"[DRY-RUN] Would send missing .tex notice to {name} ({email})")
+            return True
+
+        assignment_name = self.grading_config.get('assignment_name', 'Assignment')
+        subject = self.missing_tex_subject_template.format(assignment_name=assignment_name)
+        body = self.missing_tex_body_template.format(student_name=name,
+                                                     assignment_name=assignment_name)
+
+        error = None
+        for attempt in range(self.max_retries + 1):
+            if self.email_backend == 'applescript':
+                ok, error = send_email_via_applescript(
+                    to=email, subject=subject, body=body,
+                    attachment_path=None, from_account=self.from_email)
+            else:
+                msg = EmailMessage()
+                msg['Subject'] = subject
+                msg['From'] = f"{self.from_name} <{self.from_email}>"
+                msg['To'] = email
+                msg.set_content(body)
+                try:
+                    self.smtp_connection.send_message(msg)
+                    ok = True
+                except Exception as e:
+                    ok, error = False, str(e)
+            if ok:
+                print(f"📨 {name} ({email}): missing .tex notice sent")
+                notified[key] = {'email': email,
+                                 'sent_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                 'reason': student.get('reason', '')}
+                failed.pop(key, None)
+                self._save_delivery_tracking()
+                return True
+            if attempt < self.max_retries:
+                delay = self.retry_delay * (2 ** attempt)
+                print(f"⚠️  {name}: Send failed ({error}), retrying in {delay}s...")
+                time.sleep(delay)
+
+        print(f"❌ {name}: missing .tex notice failed after {self.max_retries + 1} attempts - {error}")
+        failed[key] = {'email': email, 'attempts': self.max_retries + 1, 'last_error': error}
+        self._save_delivery_tracking()
+        return False
+
+    def _show_email_preview_and_confirm(self, pdf_matches: List[Tuple],
+                                        notices: List[Dict] = None) -> None:
         """
         Display a preview of all emails that will be sent and require user confirmation.
         This is a safety check to prevent sending emails to wrong students.
@@ -622,10 +704,19 @@ LaTA Grading System"""
             print(f"... and {len(pdf_matches) - preview_limit} more students")
             print()
 
+        if notices:
+            print(f"Missing .tex notices (no attachment) -- {len(notices)} student(s) "
+                  f"submitted a PDF but no .tex file:")
+            print()
+            for student in notices:
+                print(f"     {student['name']:<30} → {student['email']}  ({student['reason']})")
+            print()
+
         # Summary statistics
         total_size = sum(pdf_path.stat().st_size for _, pdf_path in pdf_matches) / (1024 * 1024)  # MB
         print("=" * 80)
-        print(f"Total: {len(pdf_matches)} students | Total size: {total_size:.1f} MB")
+        print(f"Total: {len(pdf_matches)} feedback emails | Total size: {total_size:.1f} MB"
+              + (f" | {len(notices)} missing .tex notices" if notices else ""))
         print("=" * 80)
         print()
 
@@ -647,7 +738,8 @@ LaTA Grading System"""
     def send_feedback_batch(self, submissions: List[StudentSubmission],
                            dry_run: bool = False,
                            test_recipients: List[str] = None,
-                           force_resend: bool = False):
+                           force_resend: bool = False,
+                           missing_tex: List[Dict] = None):
         """
         Send feedback PDFs to all students in batch.
 
@@ -656,6 +748,8 @@ LaTA Grading System"""
             dry_run: If True, simulate without sending
             test_recipients: List of email addresses to send to (testing mode)
             force_resend: If True, resend even if already delivered
+            missing_tex: Students who submitted a PDF but no .tex file
+                (GradescopeIngestor.find_pdf_only_submitters); each gets a notice instead
         """
         print("=" * 80)
         print("SENDING FEEDBACK EMAILS")
@@ -711,16 +805,29 @@ LaTA Grading System"""
                 print(f"     ... and {len(missing_pdfs) - 5} more")
             print()
 
-        if not pdf_matches:
+        # Students with a PDF but no .tex file: a notice instead of feedback
+        notices = []
+        for student in missing_tex or []:
+            if test_recipients and student['email'] not in test_recipients:
+                continue
+            key = student['name'].replace(" ", "_").replace("(", "").replace(")", "")
+            if not force_resend and key in self.delivery_data.get('missing_tex_notified', {}):
+                print(f"⏭️  {student['name']}: Missing .tex notice already sent "
+                      f"(use --force-resend to override)")
+                continue
+            notices.append(student)
+
+        if not pdf_matches and not notices:
             print("❌ No emails to send (all already delivered or PDFs missing)")
             return
 
         # SAFETY CHECK: Show preview and require confirmation (unless dry-run or test mode)
         if not dry_run and not test_recipients:
-            self._show_email_preview_and_confirm(pdf_matches)
+            self._show_email_preview_and_confirm(pdf_matches, notices)
 
-        print(f"📊 Sending to {len(pdf_matches)} student(s)...")
-        print()
+        if pdf_matches:
+            print(f"📊 Sending to {len(pdf_matches)} student(s)...")
+            print()
 
         # Send emails
         sent_count = 0
@@ -738,9 +845,24 @@ LaTA Grading System"""
             if not dry_run and success:
                 time.sleep(self.batch_delay)
 
+        notice_sent = notice_failed = 0
+        if notices:
+            print()
+            print(f"📨 Sending missing .tex notices to {len(notices)} student(s)...")
+            print()
+            for student in notices:
+                if self.send_missing_tex_notice(student, dry_run=dry_run):
+                    notice_sent += 1
+                    if not dry_run:
+                        time.sleep(self.batch_delay)
+                else:
+                    notice_failed += 1
+
         print()
         print("=" * 80)
-        print(f"Sent: {sent_count} | Failed: {failed_count}")
+        print(f"Sent: {sent_count} | Failed: {failed_count}"
+              + (f" | Missing .tex notices sent: {notice_sent}, failed: {notice_failed}"
+                 if notices else ""))
         print("=" * 80)
 
     def get_delivery_report(self) -> Dict:
@@ -762,11 +884,19 @@ LaTA Grading System"""
                 'attempts': info.get('attempts', 0)
             })
 
+        notice_failures = [
+            {'student': name.replace("_", " "), 'email': info.get('email', 'Unknown'),
+             'error': info.get('last_error', 'Unknown error'), 'attempts': info.get('attempts', 0)}
+            for name, info in self.delivery_data.get('missing_tex_failed', {}).items()
+        ]
+
         return {
             'total': len(delivered) + len(failed),
             'sent': len(delivered),
             'failed': len(failed),
-            'failures': failures
+            'failures': failures,
+            'missing_tex_notified': len(self.delivery_data.get('missing_tex_notified', {})),
+            'missing_tex_failures': notice_failures,
         }
 
     def __del__(self):

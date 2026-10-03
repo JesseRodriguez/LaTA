@@ -197,6 +197,15 @@ email:
     Best regards,
     LaTA Grading System
 
+  # Students who submitted a PDF but no .tex file have nothing to grade; send-feedback
+  # emails them a notice instead (disable with --no-missing-tex-notices). The built-in
+  # wording asks them to submit the .tex file to avoid a zero and further late penalties.
+  # Override it here if you like (same variables):
+  # missing_tex_subject_template: "{assignment_name}: your .tex file is missing"
+  # missing_tex_body_template: |
+  #   Hello {student_name},
+  #   ...
+
   # Error Handling and Delivery Settings
   max_retries: 3                   # Retry failed sends up to 3 times
   retry_delay: 2                   # Seconds between retries (uses exponential backoff: 2s, 4s, 8s)
