@@ -1,0 +1,314 @@
+# LaTA Grading System - Automated grading workflow using open-source LLMs.
+# Copyright (C) 2026 Jesse A. Rodriguez
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+"""
+Gradescope as the watcher's source of submissions, and as where its grades go.
+
+Source. Each pass downloads the grades CSV of each assignment's .tex and PDF assignments
+(one small request each). The PDF assignment is only used for submission times, and the
+CSV has them, so its submissions are never downloaded. The .tex assignment is exported
+("Export Submissions") only when its list of submissions has changed.
+
+Grades. A graded student's score goes into the PDF assignment's LaTA question as you
+would enter it by hand: on a negatively scored question, LaTA's points off (out of its
+rubric total, late penalty included) as the point adjustment, or the zero-point "Correct"
+rubric item for a perfect score. The LaTA question is the PDF assignment's largest
+question unless gradescope.question names it; the rest are left for hand grading. A student who
+submitted a PDF but no .tex gets the rubric item that takes all points away (or an
+adjustment of minus the question's points). Grades are only written to question
+submissions nobody has graded -- or that LaTA graded itself -- and are read back after
+saving. Corrections go to the student's new (resubmitted, ungraded) PDF submission.
+
+Release. Feedback waits until you have graded the hand-graded questions and published
+the grades on Gradescope. Then `send` (typed into the watcher) checks that the assignment
+is published and every waiting student is fully graded, posts grades to Canvas, and
+emails the feedback.
+"""
+
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import yaml
+
+from lata.gradescope import Gradescope, GradescopeError, NotLoggedIn
+from lata.inbox import prepare_from_inbox
+from lata.ledger import gradescope_ts, iso, parse_ts, student_key
+
+STATE = ".gradescope.json"
+
+
+def _load(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
+def row_key(row: Dict[str, str]) -> str:
+    return student_key(row.get('SID'), row.get('Email'))
+
+
+def submitted(row: Dict[str, str]) -> bool:
+    return bool(row.get('Submission ID')) and row.get('Status') != 'Missing'
+
+
+def pdf_metadata_from_scores(rows: List[Dict[str, str]]) -> dict:
+    """The PDF assignment's submission_metadata.yml, rebuilt from its grades CSV.
+
+    Times are written in Gradescope's export format (UTC, "... Z"), which is what the
+    ingestor and post_grading.py parse."""
+    meta = {}
+    for r in rows:
+        if not submitted(r):
+            continue
+        created = parse_ts(r.get('Submission Time'))
+        meta[f"submission_{r['Submission ID']}"] = {
+            ':submitters': [{':name': f"{r.get('First Name', '')} {r.get('Last Name', '')}".strip(),
+                             ':sid': r.get('SID') or None, ':email': r.get('Email')}],
+            ':created_at': gradescope_ts(created) if created else r.get('Submission Time'),
+        }
+    return meta
+
+
+class GradescopeSource:
+    """Refreshes an assignment's export directory from Gradescope."""
+
+    def __init__(self, gs: Gradescope, course: int, inbox_dir: str):
+        self.gs = gs
+        self.course = course
+        self.root = Path(inbox_dir)
+        self.pdf_rows: Dict[str, List[Dict[str, str]]] = {}
+
+    def describe(self, a) -> str:
+        ids = a.gradescope or {}
+        return f"Gradescope course {self.course}, .tex {ids.get('tex')}, PDF {ids.get('pdf')}"
+
+    def refresh(self, a, events) -> None:
+        ids = a.gradescope
+        state_path = a.export_dir / STATE
+        state = _load(state_path)
+
+        pdf_rows = self.gs.scores(self.course, ids['pdf'])
+        self.pdf_rows[a.name] = pdf_rows
+        a.export_dir.mkdir(parents=True, exist_ok=True)
+        meta = pdf_metadata_from_scores(pdf_rows)
+        meta_path = a.export_dir / "pdf_submission_metadata.yml"
+        new_text = yaml.safe_dump(meta, sort_keys=True)
+        if not meta_path.exists() or meta_path.read_text() != new_text:
+            meta_path.write_text(new_text)
+
+        tex_rows = self.gs.scores(self.course, ids['tex'])
+        signature = sorted(r['Submission ID'] for r in tex_rows if submitted(r))
+        if signature and signature != state.get('tex_signature'):
+            folder = self.root / a.name
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            zip_path = folder / f"gradescope_tex_{stamp}.zip"
+            self.gs.export_submissions(self.course, ids['tex'], zip_path)
+            result = prepare_from_inbox(folder, a.export_dir, quiet=True)
+            for action in (result.actions if result else []):
+                events.info.append(f"{a.name}: {action}")
+            for old in folder.glob("gradescope_tex_*.zip"):        # keep only the newest
+                if old != zip_path:
+                    old.unlink(missing_ok=True)
+            state['tex_signature'] = signature
+            _save(state_path, state)
+
+
+@dataclass
+class Entry:
+    status: str       # entered | match | would-enter | conflict | no-pdf | no-score | error
+    message: str
+    record: Optional[dict] = None
+
+
+class GradeEntry:
+    """Writes LaTA's grades into the PDF assignment's LaTA question."""
+
+    def __init__(self, gs: Gradescope, course: int):
+        self.gs = gs
+        self.course = course
+        self.questions: Dict[str, object] = {}
+
+    # -- which question ----------------------------------------------------------------
+
+    def question_for(self, a) -> object:
+        if a.name in self.questions:
+            return self.questions[a.name]
+        ids = a.gradescope
+        questions = self.gs.questions(self.course, ids['pdf'])
+        wanted = ids.get('question')
+        if wanted is not None:
+            match = [q for q in questions if str(q.id) == str(wanted) or q.title == str(wanted)]
+        else:
+            top = max((q.weight for q in questions), default=None)
+            match = [q for q in questions if q.weight == top]
+        if len(match) != 1:
+            listing = ", ".join(f"{q.title!r} ({q.weight:g} pts, id {q.id})" for q in questions)
+            how = f"named {wanted!r}" if wanted is not None else "that is the largest"
+            raise GradescopeError(f"{a.name}: no single question {how} on PDF assignment {ids['pdf']}. "
+                                  f"Questions: {listing}. Set gradescope.question.")
+        self.questions[a.name] = match[0]
+        return match[0]
+
+    # -- mapping students to question submissions ----------------------------------------
+
+    def qsid_for(self, a, asid: str) -> Optional[int]:
+        state_path = a.export_dir / STATE
+        state = _load(state_path)
+        question = self.question_for(a)
+        cache = state.setdefault('qsid_by_asid', {}).setdefault(str(question.id), {})
+        if asid in cache:
+            return cache[asid]
+        known = set(cache.values())
+        for qsid in self.gs.question_submission_ids(self.course, question.id):
+            if qsid in known:
+                continue
+            page = self.gs.grading_page(self.course, question.id, qsid)
+            cache[str(page['submission']['assignment_submission_id'])] = qsid
+        _save(state_path, state)
+        return cache.get(asid)
+
+    # -- entering ------------------------------------------------------------------------
+
+    def enter(self, a, st: dict, pdf_rows: List[Dict[str, str]], final_score: Optional[float],
+              zero: bool = False, dry_run: bool = False, max_score: Optional[float] = None) -> Entry:
+        key = student_key(st.get('sid'), st.get('email'))
+        row = next((r for r in pdf_rows if row_key(r) == key and submitted(r)), None)
+        if row is None:
+            return Entry("no-pdf", "no PDF submission on Gradescope to grade")
+        question = self.question_for(a)
+        if not zero:
+            if final_score is None:
+                return Entry("no-score", "no final score recorded for the report")
+            if not max_score:
+                max_score = rubric_total(a)
+        asid = row['Submission ID']
+        qsid = self.qsid_for(a, asid)
+        if qsid is None:
+            return Entry("error", f"could not find submission {asid} on question {question.title!r}")
+        page = self.gs.grading_page(self.course, question.id, qsid)
+
+        weight = float(page['question']['weight'])
+        if page['question'].get('scoring_type') != 'negative':
+            return Entry("conflict", f"question {question.title!r} is not negatively scored; LaTA only "
+                                     f"enters points off on negatively scored questions")
+        items = page.get('rubric_items') or []
+        rubric = {int(i['id']): False for i in items}
+        if zero:
+            wipe = next((i for i in items if abs(float(i['weight']) + weight) < 1e-6), None)
+            if wipe:
+                rubric[int(wipe['id'])] = True
+                points = 0.0
+            else:
+                points = -weight
+            target = 0.0
+        else:
+            # Points off as on the report: LaTA's total minus the final score (late penalty
+            # included), whatever the question itself is worth
+            points = round(float(final_score) - float(max_score), 2)
+            target = weight + points
+            if abs(points) < 1e-9:
+                full = [i for i in items if abs(float(i['weight'])) < 1e-9]
+                full.sort(key=lambda i: 0 if any(w in i['description'].lower() for w in ('correct', 'full')) else 1)
+                if full:
+                    rubric[int(full[0]['id'])] = True
+                points = 0.0
+                target = weight
+        expected = target
+        if page['question'].get('floor'):
+            expected = max(expected, 0.0)
+        if page['question'].get('ceiling'):
+            expected = min(expected, weight)
+
+        record = {"asid": asid, "qsid": qsid, "points": points,
+                  "rubric": sorted(k for k, v in rubric.items() if v), "expected_score": expected,
+                  "kind": "zero" if zero else "score"}
+        current = float(page['submission'].get('score') or 0.0)
+        graded = bool(page['submission'].get('graded'))
+        ours = (st.get('gradescope') or {}).get('qsid') == qsid and \
+            abs(float((st.get('gradescope') or {}).get('expected_score', -1e9)) - current) < 1e-6
+        if graded and abs(current - expected) < 1e-6:
+            return Entry("match", f"already {current:g} on Gradescope", record)
+        if graded and not ours:
+            return Entry("conflict", f"already graded on Gradescope as {current:g}; LaTA has {expected:g}. Left alone.")
+        if dry_run:
+            return Entry("would-enter", f"would enter {expected:g} (adjustment {points:g})", record)
+
+        self.gs.save_grade(self.course, question.id, qsid, rubric, points)
+        check = self.gs.grading_page(self.course, question.id, qsid)
+        got = float(check['submission'].get('score') or 0.0)
+        if abs(got - expected) > 1e-6:
+            return Entry("error", f"saved, but Gradescope shows {got:g} instead of {expected:g}", record)
+        record["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        return Entry("entered", f"entered {expected:g} on Gradescope", record)
+
+    def published(self, a, st_with_qsid: Optional[dict]) -> Optional[bool]:
+        """Whether the PDF assignment's grades are published (None if it cannot be told)."""
+        if not st_with_qsid:
+            return None
+        question = self.question_for(a)
+        page = self.gs.grading_page(self.course, question.id, st_with_qsid['qsid'])
+        return bool(page['assignment'].get('published'))
+
+
+def rubric_total(a) -> float:
+    """Points LaTA's rubric is out of (extra credit excluded), as in the reports."""
+    path = Path(a.config['paths']['rubrics_dir']) / a.config['paths']['rubric_file']
+    rubric = yaml.safe_load(path.read_text()) or {}
+    return float(sum(item.get('points', 0) for sections in rubric.values() for section in sections
+                     for item in section.get('items', []) if not item.get('is_extra_credit', False)))
+
+
+def final_score_for(a, name: str, sid: str) -> Tuple[Optional[float], Optional[float]]:
+    """(final score, max score) from the student's report record.
+
+    grading_metadata.yaml has them for anything graded since they were recorded; for
+    older reports they are rebuilt from the saved per-problem results and the recorded
+    late penalty, the same way the report computed them."""
+    out = Path(f"data/output/{a.name}_Feedback")
+    meta_path = out / "grading_metadata.yaml"
+    meta = (yaml.safe_load(meta_path.read_text()) or {}) if meta_path.exists() else {}
+    safe = name.replace(" ", "_").replace("(", "").replace(")", "")
+    m = meta.get(safe) or {}
+    if 'final_score' in m:
+        return float(m['final_score']), float(m.get('max_score') or 0) or None
+    if a.corrections:
+        return None, None              # corrections restore extra credit; do not guess
+    debug = out / "debug" / f"{name} ({sid})"
+    results = sorted(debug.glob("*/result.json")) if debug.exists() else []
+    if not results:
+        return None, None
+    total = max_score = 0.0
+    for path in results:
+        for item in json.loads(path.read_text()).get("items", []):
+            total += float(item.get("score", 0))
+            if not item.get("is_extra_credit"):
+                max_score += float(item.get("max_score", 0))
+    late = a.config.get('grading', {}).get('late_penalties', {})
+    pct = float(m.get('late_penalty', 0.0) or 0.0)
+    elsewhere = float(late.get('points_awarded_elsewhere', 0) or 0)
+    return round(total - pct * (max_score + elsewhere), 4), max_score

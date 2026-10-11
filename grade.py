@@ -54,7 +54,10 @@ def main():
     watch.add_argument("--send", dest="auto_send", action="store_true", default=None,
                        help="Email feedback as soon as a clean report is ready (overrides watch.auto_send_feedback)")
     watch.add_argument("--no-send", dest="auto_send", action="store_false",
-                       help="Grade, but leave feedback for post_grading.py send-feedback")
+                       help="Grade, but hold feedback until you type `send` (the default)")
+    watch.add_argument("--dry-run", action="store_true",
+                       help="One check that only reports what would happen: fetches exports, but "
+                            "grades nothing, sends nothing, enters nothing on Gradescope, saves no state")
     args = parser.parse_args()
 
     # 1. Load Config & Assets
@@ -75,7 +78,8 @@ def main():
                   "config without an `assignments:` list.")
             return
         from lata.watch import run_watch
-        run_watch(config, config_path, options, once=args.once, auto_send=args.auto_send)
+        run_watch(config, config_path, options, once=args.once, auto_send=args.auto_send,
+                  dry_run=args.dry_run)
         return
 
     # Unpack anything waiting in the inbox: the Gradescope .zip exports go straight in,

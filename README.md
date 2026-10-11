@@ -107,8 +107,9 @@ uv run python post_grading.py split-for-tas 3   # Split feedback for 3 TAs
 uv run python post_grading.py send-feedback      # Email feedback to students
 ```
 
-Or list several assignments in `config.yaml` and `uv run grade.py` keeps watching them,
-grading late submissions as they arrive and emailing feedback (see [Watching
+Or list several assignments in `config.yaml` and `uv run grade.py` keeps watching them:
+it fetches submissions from Gradescope, grades them as they arrive (late ones included),
+enters the grades on Gradescope, and sends feedback when you release it (see [Watching
 Assignments](docs/WATCHING.md)).
 
 Output appears in `data/output/{assignment_name}_Feedback/` with individual PDFs, LaTeX source logs, and debug files.
@@ -143,6 +144,8 @@ LaTA/
 │   ├── pipeline.py             #   Grades one assignment (what grade.py runs)
 │   ├── watch.py                #   Watches a list of assignments until stopped
 │   ├── ledger.py               #   Per-student state and the watcher's rules
+│   ├── gradescope.py           #   Gradescope session (login, exports, grades, Canvas)
+│   ├── gradescope_sync.py      #   Fetching from and entering grades on Gradescope
 │   ├── segmenter.py            #   Problem extraction via LLM
 │   ├── grader.py               #   LLM-based rubric evaluation
 │   ├── reporter.py             #   PDF generation and error recovery

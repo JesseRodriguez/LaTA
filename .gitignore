@@ -23,6 +23,8 @@ venv/
 
 # Configuration (contains sensitive paths and settings)
 /config.yaml
+/config.*.yaml
+!/config.example.yaml
 
 # Input data (student submissions from Gradescope)
 data/input/*

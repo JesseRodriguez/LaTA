@@ -944,6 +944,11 @@ class LatexReporter:
                 self.grading_metadata[safe_name]['late_penalty'] = late_penalty.get('penalty_percentage', 0.0)
                 self.grading_metadata[safe_name]['zero_scored_items'] = zero_scored_items
                 self.grading_metadata[safe_name]['extra_credit_earned'] = extra_credit_earned
+                # The numbers on the report, for entering the grade elsewhere (Gradescope)
+                self.grading_metadata[safe_name]['total_score'] = float(grade_result.total_score)
+                self.grading_metadata[safe_name]['max_score'] = float(max_score)
+                self.grading_metadata[safe_name]['late_points_deducted'] = float(late_penalty.get('points_deducted', 0.0))
+                self.grading_metadata[safe_name]['final_score'] = float(late_penalty.get('final_score', grade_result.total_score))
                 self._save_grading_metadata()
 
         # Attempt compilation

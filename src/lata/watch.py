@@ -31,20 +31,28 @@ List the assignments in config.yaml and run `uv run grade.py`:
 
 Every few minutes the watcher refreshes each assignment's exports, works out from the
 ledger (lata.ledger) what each student needs -- grading, a missing-file notice, a flag for
-you -- and does it. Graded reports go out by email when clean and auto-sending is on; a
-report with a grading failure, a segmentation warning or a possible prompt injection is
-held for you instead. Anything that needs you is emailed to watch.notify_email.
+you -- and does it. A report with a grading failure, a segmentation warning or a possible
+prompt injection is held for you. Anything that needs you is emailed to
+watch.notify_email.
 
 Exports come from a source. `inbox` (the default) unpacks Gradescope .zip exports dropped
 in data/input/inbox/<assignment name>/ -- so re-exporting is all a late submission needs.
 A corrections assignment shares the first pass's PDF assignment: drop that export in the
-first pass's inbox and both use it.
+first pass's inbox and both use it. `gradescope` fetches them itself and enters the grades
+on Gradescope too (lata.gradescope_sync).
+
+Feedback waits for you by default: grade any hand-graded questions, publish on Gradescope,
+then type `send` into the running watcher. It checks the grades are published and complete,
+posts them to Canvas, and emails the reports. With watch.auto_send_feedback, clean reports
+are emailed as soon as they are ready instead.
 """
 
 import copy
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -70,6 +78,13 @@ DEFAULTS = {
     'source': 'inbox',
     'inbox_dir': 'data/input/inbox',
     'unload_model_after_idle_minutes': 120,
+    'gradescope': {},
+}
+GRADESCOPE_DEFAULTS = {
+    'course': None,
+    'profile_dir': None,             # default ~/.lata/gradescope-profile
+    'enter_grades': True,
+    'canvas_sync': True,
 }
 
 
@@ -81,6 +96,7 @@ class Assignment:
     corrections: bool
     base: Optional[str]             # first-pass assignment name, for corrections
     watch_until: object = None
+    gradescope: Optional[dict] = None   # {tex, pdf, question?} Gradescope assignment ids
 
     @property
     def export_dir(self) -> Path:
@@ -138,7 +154,8 @@ def build_assignments(config: dict) -> List[Assignment]:
         if corrections and base not in names and not Path(f"data/output/{base}_Feedback").exists():
             problems.append(f"{name}: its first pass {base} is neither listed nor graded")
         result.append(Assignment(name=name, config=cfg, due=due, corrections=corrections,
-                                 base=base, watch_until=parse_ts(entry.get('watch_until'))))
+                                 base=base, watch_until=parse_ts(entry.get('watch_until')),
+                                 gradescope=entry.get('gradescope')))
     if problems:
         raise ValueError("Cannot start watching:\n  - " + "\n  - ".join(problems))
     # First passes before their corrections, so a late first pass is graded (and its time
@@ -166,17 +183,35 @@ class InboxSource:
 
 class Watcher:
     def __init__(self, config: dict, config_path: str, options: GradingOptions,
-                 auto_send: Optional[bool] = None):
+                 auto_send: Optional[bool] = None, dry_run: bool = False):
         self.config = config
         self.config_path = config_path
         self.options = options
+        self.dry_run = dry_run
         self.settings = {**DEFAULTS, **(config.get('watch') or {})}
+        self.gs_settings = {**GRADESCOPE_DEFAULTS, **(self.settings.get('gradescope') or {})}
         if auto_send is not None:
             self.settings['auto_send_feedback'] = auto_send
         self.assignments = build_assignments(config)
-        if self.settings['source'] != 'inbox':
-            raise ValueError(f"Unknown watch.source {self.settings['source']!r} (available: inbox)")
-        self.source = InboxSource(self.settings['inbox_dir'])
+        self.gs = None                     # Gradescope session, opened on first use
+        self.grade_entry = None
+        self.reported = set()              # attention messages already sent, to not repeat
+        self.announced: Dict[str, frozenset] = {}
+        if self.settings['source'] == 'inbox':
+            self.source = InboxSource(self.settings['inbox_dir'])
+        elif self.settings['source'] == 'gradescope':
+            problems = []
+            if not self.gs_settings['course']:
+                problems.append("watch.gradescope.course is not set")
+            for a in self.assignments:
+                ids = a.gradescope or {}
+                if not (ids.get('tex') and ids.get('pdf')):
+                    problems.append(f"{a.name}: needs gradescope: {{tex: <id>, pdf: <id>}}")
+            if problems:
+                raise ValueError("Cannot start watching:\n  - " + "\n  - ".join(problems))
+            self.source = None             # created with the session
+        else:
+            raise ValueError(f"Unknown watch.source {self.settings['source']!r} (inbox or gradescope)")
         self.ledgers: Dict[str, Ledger] = {}
         self.snapshots: Dict[str, dict] = {}
         self.emailers: Dict[str, object] = {}
@@ -191,8 +226,7 @@ class Watcher:
 
     @property
     def sends_email(self) -> bool:
-        s = self.settings
-        return bool(s['auto_send_feedback'] or s['send_notices'] or s['notify_email'])
+        return not self.dry_run          # feedback is always sent eventually, by `send` if not automatically
 
     def authenticate(self):
         """Log in to the mail backend once, at startup, while someone is at the keyboard."""
@@ -264,6 +298,157 @@ class Watcher:
             self.server = None
             self.config['system']['grader'] = copy.deepcopy(self.pristine_grader)
 
+    # -- gradescope --------------------------------------------------------------------
+
+    @property
+    def uses_gradescope(self) -> bool:
+        return self.settings['source'] == 'gradescope'
+
+    def gradescope(self):
+        """The logged-in Gradescope session, opened (or reopened) on demand."""
+        if self.gs is None:
+            from lata.gradescope import Gradescope
+            from lata.gradescope_sync import GradescopeSource, GradeEntry
+            gs = Gradescope(self.gs_settings['profile_dir'])
+            gs.__enter__()                                  # raises NotLoggedIn
+            self.gs = gs
+            course = int(self.gs_settings['course'])
+            self.source = GradescopeSource(gs, course, self.settings['inbox_dir'])
+            self.grade_entry = GradeEntry(gs, course)
+        return self.gs
+
+    def close_gradescope(self):
+        if self.gs is not None:
+            self.gs.close()
+            self.gs = None
+
+    def attention_once(self, events: Events, message: str):
+        if message not in self.reported:
+            self.reported.add(message)
+            events.attention.append(message)
+
+    def ledger(self, a: Assignment) -> Ledger:
+        if a.name not in self.ledgers:
+            ledger = Ledger(a.output_dir)
+            if self.dry_run:
+                ledger.save = lambda: None                   # a dry run changes nothing
+            self.ledgers[a.name] = ledger
+        return self.ledgers[a.name]
+
+    def sync_grades(self, a: Assignment, ledger: Ledger, events: Events):
+        """Put graded students' scores (and missing-.tex zeros) on Gradescope."""
+        from lata.gradescope_sync import final_score_for
+        rows = self.source.pdf_rows.get(a.name, [])
+        pdf_check = corrections_pdf_check(a.base, self.pdf_metadata_for(a)) if a.corrections else None
+        for key, st in ledger.students.items():
+            rec = st.get("gradescope") or {}
+            graded = st.get("graded")
+            name = st.get("name", key)
+            if graded and not st.get("held") and st.get("report"):
+                if rec.get("kind") == "score" and rec.get("status") in ("entered", "match", "not-applied"):
+                    continue
+                if pdf_check and pdf_check(name, st.get("sid"), st.get("email")) is False:
+                    st["gradescope"] = {"kind": "score", "status": "not-applied"}
+                    continue                 # incomplete corrections: grade is not entered
+                final, max_score = final_score_for(a, name, st.get("sid", ""))
+                entry = self.grade_entry.enter(a, st, rows, final, max_score=max_score, dry_run=self.dry_run)
+            elif (not graded and not a.corrections and rec.get("kind") != "zero"
+                  and (st.get("notices") or {}).get("missing_tex", "").startswith("20")):
+                entry = self.grade_entry.enter(a, st, rows, None, zero=True, dry_run=self.dry_run)
+            else:
+                continue
+            if entry.status in ("entered", "match"):
+                st["gradescope"] = {**(entry.record or {}), "status": entry.status}
+                events.info.append(f"{a.name}: {name}: {entry.message}")
+            elif entry.status == "would-enter":
+                events.info.append(f"{a.name}: {name}: {entry.message}")
+            elif entry.status == "no-pdf":
+                continue                     # tried again when their PDF shows up
+            elif entry.status == "conflict":
+                st["gradescope"] = {"kind": "score", "status": "conflict", "message": entry.message}
+                self.attention_once(events, f"{a.name}: {name}: {entry.message}")
+            else:
+                self.attention_once(events, f"{a.name}: {name}: could not enter grade: {entry.message}")
+
+    # -- release -----------------------------------------------------------------------
+
+    def awaiting_release(self, a: Assignment, ledger: Ledger) -> List[tuple]:
+        """Graded students whose feedback is ready to go once you release it."""
+        out = []
+        for key, st in ledger.students.items():
+            if (not st.get("graded") or st.get("held") or st.get("feedback_sent_at")
+                    or not st.get("report") or not Path(st["report"]).exists()):
+                continue
+            if self.uses_gradescope and self.gs_settings['enter_grades'] and \
+                    (st.get("gradescope") or {}).get("status") not in ("entered", "match", "not-applied"):
+                continue                     # not on Gradescope yet (or a conflict to resolve)
+            out.append((key, st))
+        return out
+
+    def announce_release(self, a: Assignment, ledger: Ledger, events: Events):
+        ready = self.awaiting_release(a, ledger)
+        keys = frozenset(k for k, _ in ready)
+        if not keys or keys == self.announced.get(a.name):
+            return
+        self.announced[a.name] = keys
+        steps = ("grade any hand-graded questions and publish the grades on Gradescope, then "
+                 if self.uses_gradescope else "")
+        events.attention.append(f"{a.name}: feedback for {len(keys)} student(s) is ready. "
+                                f"To release it, {steps}type `send {a.name}` in the watcher.")
+
+    def release(self, name: Optional[str], force: bool = False):
+        targets = [a for a in self.assignments if name is None or a.name.lower() == name.lower()]
+        if not targets:
+            print(f"   No assignment called {name!r}. Watching: {', '.join(a.name for a in self.assignments)}")
+            return
+        events = Events()
+        for a in targets:
+            ledger = self.ledger(a)
+            ready = self.awaiting_release(a, ledger)
+            if not ready:
+                if name is not None:
+                    print(f"   {a.name}: nothing waiting to be sent")
+                continue
+            if self.uses_gradescope and not self.release_checks(a, ready, force, events):
+                continue
+            self.send_feedback(a, ledger, utcnow(), events, only={k for k, _ in ready})
+            ledger.save()
+        if events.info or events.attention:
+            self.finish_pass(events)
+
+    def release_checks(self, a: Assignment, ready: List[tuple], force: bool, events: Events) -> bool:
+        """Before sending: grades published and complete on Gradescope, then post to Canvas."""
+        try:
+            self.gradescope()
+            course, pdf = int(self.gs_settings['course']), a.gradescope['pdf']
+            with_qsid = next((st["gradescope"] for _, st in ready if (st.get("gradescope") or {}).get("qsid")), None)
+            if with_qsid is None:
+                with_qsid = next((st["gradescope"] for st in self.ledger(a).students.values()
+                                  if (st.get("gradescope") or {}).get("qsid")), None)
+            published = self.grade_entry.published(a, with_qsid)
+            if published is False:
+                print(f"   ❌ {a.name}: grades are not published on Gradescope yet. Publish them, then `send {a.name}` again.")
+                return False
+            rows = {row_key: r for r in self.gs.scores(course, pdf) for row_key in [student_key(r.get('SID'), r.get('Email'))]}
+            incomplete = [st.get("name") for key, st in ready if (rows.get(key) or {}).get('Status') != 'Graded']
+            if incomplete and not force:
+                print(f"   ❌ {a.name}: {len(incomplete)} student(s) are not fully graded on Gradescope "
+                      f"(hand-graded questions?): {', '.join(incomplete)}")
+                print(f"      Finish them, or `send {a.name} --force` to send anyway.")
+                return False
+            if self.gs_settings['canvas_sync']:
+                if self.dry_run:
+                    print(f"   [DRY-RUN] would post {a.name}'s grades to Canvas")
+                else:
+                    print(f"   ⏳ Posting {a.name} grades to Canvas...")
+                    self.gs.post_grades_to_canvas(course, pdf)
+                    events.info.append(f"{a.name}: grades posted to Canvas")
+            return True
+        except Exception as e:
+            print(f"   ❌ {a.name}: {e}")
+            events.attention.append(f"{a.name}: release stopped: {e}")
+            return False
+
     # -- one pass ---------------------------------------------------------------------
 
     def first_pass_lookup(self, a: Assignment):
@@ -304,18 +489,35 @@ class Watcher:
         """Refresh, decide and act for every assignment. Returns False to stop watching."""
         events = Events()
         now = utcnow()
+        if self.uses_gradescope:
+            try:
+                self.gradescope()
+                # Session works again: a later failure should be reported afresh
+                self.reported = {m for m in self.reported if not m.startswith("Gradescope:")}
+            except Exception as e:
+                self.close_gradescope()
+                self.attention_once(events, f"Gradescope: {e}. Nothing is fetched or entered until this is fixed.")
+                self.finish_pass(events)
+                return True
         for a in self.assignments:
             if a.watch_until and now > a.watch_until:
                 continue
             try:
                 self.source.refresh(a, events)
             except Exception as e:
-                events.attention.append(f"{a.name}: could not refresh exports: {e}")
+                self.attention_once(events, f"{a.name}: could not refresh exports: {e}")
+                if self.uses_gradescope:
+                    self.close_gradescope()       # reopened (and re-checked) next pass
                 continue
             keep_going = self.process(a, now, events)
             if not keep_going:
                 self.finish_pass(events)
                 return False
+        if self.gs is not None:
+            try:
+                self.gs.save()           # keep the saved session as fresh as Gradescope's
+            except Exception:
+                pass
         self.finish_pass(events)
         return True
 
@@ -324,7 +526,7 @@ class Watcher:
                 not self.pdf_metadata_for(a).exists():
             return True                                      # nothing exported yet
         snapshot = read_snapshot(a.export_dir, self.pdf_metadata_for(a))
-        ledger = self.ledgers.setdefault(a.name, Ledger(a.output_dir))
+        ledger = self.ledger(a)
         self.snapshots[a.name] = snapshot
         ledger.observe(snapshot, now)
         ledger.seed_from_outputs(snapshot, a.output_dir, safe_name)
@@ -347,6 +549,9 @@ class Watcher:
 
         for act in [x for x in actions if x.kind == "notice"]:
             student = {'name': act.name, 'email': snapshot[act.key].email, 'reason': act.detail}
+            if self.dry_run:
+                events.info.append(f"{a.name}: [DRY-RUN] would send {act.detail} notice to {act.name}")
+                continue
             if not self.settings['send_notices']:
                 events.info.append(f"{a.name}: {act.name} needs a {act.detail} notice (notices are off)")
                 ledger.get(act.key).setdefault("notices", {})[act.detail] = f"not sent (off) {iso(now)}"
@@ -359,13 +564,29 @@ class Watcher:
         ledger.save()
 
         grade = {x.key: x for x in actions if x.kind == "grade"}
-        if grade:
+        if grade and self.dry_run:
+            names = ", ".join(sorted(x.name for x in grade.values()))
+            events.info.append(f"{a.name}: [DRY-RUN] would grade {len(grade)}: {names}")
+        elif grade:
             if not self.grade(a, grade, snapshot, ledger, now, events):
                 ledger.save()
                 return False
 
-        if self.settings['auto_send_feedback']:
+        if self.uses_gradescope and self.gs_settings['enter_grades']:
+            try:
+                self.sync_grades(a, ledger, events)
+            except Exception as e:
+                self.attention_once(events, f"{a.name}: entering grades on Gradescope failed: {e}")
+            ledger.save()
+
+        if self.dry_run:
+            ready = self.awaiting_release(a, ledger)
+            if ready:
+                events.info.append(f"{a.name}: [DRY-RUN] feedback for {len(ready)} student(s) would then wait for `send`")
+        elif self.settings['auto_send_feedback']:
             self.send_feedback(a, ledger, now, events)
+        else:
+            self.announce_release(a, ledger, events)
         ledger.save()
         return True
 
@@ -406,15 +627,19 @@ class Watcher:
                                    + (f" ({outcome.validation_fixes} score fix(es))" if outcome.validation_fixes else ""))
         return not result.interrupted
 
-    def send_feedback(self, a: Assignment, ledger: Ledger, now, events: Events):
+    def send_feedback(self, a: Assignment, ledger: Ledger, now, events: Events, only=None):
+        """Email reports. Automatically (only=None) never includes students graded before
+        the watcher; a release by hand (`send`) passes exactly who to send to."""
         emailer = self.emailer(a)
         if a.corrections:
             # Whether each student resubmitted their PDF, from the latest exports
             emailer.corrections_pdf_check = corrections_pdf_check(a.base, self.pdf_metadata_for(a))
         for key, st in ledger.students.items():
             graded = st.get("graded")
-            if (not graded or graded.get("seeded") or st.get("held") or st.get("feedback_sent_at")
-                    or not st.get("report") or not Path(st["report"]).exists()):
+            if only is not None and key not in only:
+                continue
+            if (not graded or (only is None and graded.get("seeded")) or st.get("held")
+                    or st.get("feedback_sent_at") or not st.get("report") or not Path(st["report"]).exists()):
                 continue
             student = SimpleNamespace(student_name=st.get("name"), student_email=st.get("email"),
                                       student_sid=st.get("sid", ""))
@@ -460,39 +685,103 @@ class Watcher:
                 r = w.reason.split(";")[0]
                 reasons[r] = reasons.get(r, 0) + 1
             detail = ", ".join(f"{n} {r}" for r, n in sorted(reasons.items()))
-            print(f"   {a.name}: {graded} graded, {sent} sent, {held} held"
+            ready = len(self.awaiting_release(a, ledger)) if not self.settings['auto_send_feedback'] else 0
+            on_gs = sum(1 for s in sts if (s.get("gradescope") or {}).get("status") in ("entered", "match"))
+            print(f"   {a.name}: {graded} graded"
+                  + (f", {on_gs} on Gradescope" if self.uses_gradescope else "")
+                  + f", {sent} sent, {held} held"
+                  + (f", {ready} ready to send" if ready else "")
                   + (f" | waiting: {detail}" if detail else ""))
 
 
+class Console:
+    """Reads commands typed into the running watcher, without stopping its checks."""
+
+    HELP = ("   Commands: send [assignment] [--force] | status | check (check now) | help\n"
+            "   (Ctrl-C stops watching)")
+
+    def __init__(self):
+        self.queue: "queue.Queue[str]" = queue.Queue()
+        self.interactive = bool(sys.stdin and sys.stdin.isatty())
+        if self.interactive:
+            threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in sys.stdin:
+            self.queue.put(line.strip())
+
+    def wait(self, seconds: float) -> Optional[str]:
+        try:
+            return self.queue.get(timeout=max(0.0, seconds))
+        except queue.Empty:
+            return None
+
+
+def handle_command(watcher: Watcher, line: str) -> bool:
+    """Run one typed command. Returns True to check for submissions right away."""
+    parts = line.split()
+    if not parts:
+        return False
+    cmd, args = parts[0].lower(), parts[1:]
+    if cmd == "send":
+        force = "--force" in args
+        names = [x for x in args if x != "--force"]
+        watcher.release(names[0] if names else None, force=force)
+    elif cmd == "status":
+        watcher.print_status()
+    elif cmd in ("check", "now"):
+        return True
+    else:
+        print(Console.HELP)
+    return False
+
+
 def run_watch(config: dict, config_path: str, options: GradingOptions, once: bool = False,
-              auto_send: Optional[bool] = None):
+              auto_send: Optional[bool] = None, dry_run: bool = False):
     try:
-        watcher = Watcher(config, config_path, options, auto_send=auto_send)
+        watcher = Watcher(config, config_path, options, auto_send=auto_send, dry_run=dry_run)
     except ValueError as e:
         print(f"❌ {e}")
         return
     s = watcher.settings
-    print("👀 Watching " + ", ".join(a.name for a in watcher.assignments))
-    print(f"   Exports from: {s['source']} ({s['inbox_dir']}/<assignment>/)")
-    print(f"   Feedback: {'emailed automatically when clean' if s['auto_send_feedback'] else 'left for post_grading.py send-feedback'}"
+    once = once or dry_run
+    print("👀 Watching " + ", ".join(a.name for a in watcher.assignments)
+          + ("  [DRY RUN: nothing is sent, entered or saved]" if dry_run else ""))
+    if watcher.uses_gradescope:
+        gs = watcher.gs_settings
+        print(f"   Exports from: Gradescope course {gs['course']}"
+              f" | grades entered on Gradescope: {'yes' if gs['enter_grades'] else 'no'}"
+              f" | Canvas sync on release: {'yes' if gs['canvas_sync'] else 'no'}")
+    else:
+        print(f"   Exports from: {s['source']} ({s['inbox_dir']}/<assignment>/)")
+    print(f"   Feedback: {'emailed automatically when clean' if s['auto_send_feedback'] else 'waits for you to type `send`'}"
           f" | missing-file notices: {'on' if s['send_notices'] else 'off'}"
           f" | attention emails: {s['notify_email'] or 'off (desktop notification)'}")
-    if not once:
-        print(f"   Checking every {s['poll_minutes']} min. Ctrl-C to stop.")
     try:
         watcher.authenticate()
     except Exception as e:
-        print(f"❌ Email setup failed ({e}); not watching. Fix it, or turn off "
-              f"watch.auto_send_feedback, watch.send_notices and watch.notify_email.")
+        print(f"❌ Email setup failed ({e}); not watching.")
         return
+    console = Console()
+    if not once:
+        print(f"   Checking every {s['poll_minutes']} min.")
+        print(Console.HELP if console.interactive else
+              "   (Not a terminal: type commands is unavailable; feedback waits for a run with a terminal)")
     try:
         while True:
             if not watcher.run_pass() or once:
                 break
             watcher.unload_if_idle()
-            print(f"   Next check in {s['poll_minutes']} min (Ctrl-C to stop)")
-            time.sleep(s['poll_minutes'] * 60)
+            print(f"   Next check in {s['poll_minutes']} min. Type `help` for commands.")
+            deadline = time.monotonic() + s['poll_minutes'] * 60
+            while (left := deadline - time.monotonic()) > 0:
+                line = console.wait(left)
+                if line is None:
+                    break
+                if handle_command(watcher, line):
+                    break
     except KeyboardInterrupt:
         print("\n⏹️  Stopped watching.")
     finally:
         watcher.stop_server()
+        watcher.close_gradescope()

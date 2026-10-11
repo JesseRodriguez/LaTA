@@ -252,19 +252,27 @@ email:
 #     solution_file: data/solutions/ME461-HW1-SOLUTION.tex
 #     due_date: "2026-10-16 06:59:59"
 #     # watch_until: "2026-10-20 06:59:59"            # stop checking after this (GMT)
+#     # gradescope: {tex: 7654321, pdf: 7654320}      # with watch.source: gradescope
 #     # grading: {subject: "Heat Transfer"}           # any other per-assignment overrides
 #
 # watch:
-#   auto_send_feedback: false     # email clean reports as soon as they are ready
-#                                 # (--send / --no-send override this for one run)
+#   auto_send_feedback: false     # false: feedback waits until you type `send` in the watcher
+#                                 # (after hand grading + publishing); true: email clean
+#                                 # reports as soon as they are ready. --send / --no-send
+#                                 # override this for one run.
 #   send_notices: true            # "PDF missing" / ".tex missing" emails to students
 #   notify_email: null            # where to send "needs your attention" emails
 #   poll_minutes: 10              # how often to check for new submissions
 #   settle_minutes: 15            # wait this long after a student's last submission
 #   notice_after_hours: 1         # ...and this long before a missing-file notice
 #   unload_model_after_idle_minutes: 120
-#   source: inbox                 # Gradescope .zip exports in <inbox_dir>/<assignment>/
+#   source: inbox                 # Gradescope .zip exports in <inbox_dir>/<assignment>/,
+#                                 # or `gradescope` to fetch them and enter grades there
 #   inbox_dir: data/input/inbox
+#   gradescope:                   # for source: gradescope (sign in once:
+#     course: 1234567             #   uv run --extra gradescope python -m lata.gradescope login)
+#     enter_grades: true          # put LaTA's points off on the PDF assignment's largest question
+#     canvas_sync: true           # post grades to Canvas when you `send`
 
 # ------------------------------------------------------------------------------------
 # HOW ERROR RECOVERY WORKS:

@@ -1,10 +1,11 @@
 # Watching Assignments
 
 Set up rubrics and solutions for a list of assignments, run `uv run grade.py`, and walk
-away. LaTA keeps running until you press Ctrl-C. It grades each submission once the
-deadline has passed and both files are in, emails feedback (if you allow it), tells
-students when a file is missing, and tells you about anything it will not decide on its
-own.
+away. LaTA keeps running until you press Ctrl-C. It fetches submissions from Gradescope,
+grades each one once the deadline has passed and both files are in, enters the grade on
+Gradescope, tells students when a file is missing, and tells you about anything it will
+not decide on its own. Feedback goes out when you release it: after you have graded any
+hand-graded questions and published the grades, type `send`.
 
 ## Setup
 
@@ -23,9 +24,25 @@ own.
        due_date: "2026-10-16 06:59:59"
 
    watch:
-     auto_send_feedback: true                 # or pass --send / --no-send
      notify_email: you@university.edu
    ```
+
+   To have LaTA fetch from Gradescope and enter grades there, add each assignment's
+   Gradescope IDs (the numbers in its URL) and your course:
+
+   ```yaml
+   assignments:
+     - name: ME461_HW1
+       ...
+       gradescope: {tex: 7654321, pdf: 7654320}   # the .tex and PDF assignments
+
+   watch:
+     source: gradescope
+     gradescope:
+       course: 1234567
+   ```
+
+   and sign in once (see [Gradescope](#gradescope) below).
 
 3. Run it, and leave the Mac awake:
 
@@ -35,10 +52,17 @@ own.
 
    It checks that every rubric and solution exists before starting, and asks for your
    email login once, at startup. `--once` runs a single check and exits.
+   `--dry-run` runs one check that only reports what would happen -- what would be
+   graded, entered on Gradescope (and how that compares with grades already there),
+   notified and sent -- without doing any of it.
 
 ## Getting submissions in
 
-For now exports come from an inbox: download the Gradescope export `.zip` files into
+With `source: gradescope`, LaTA fetches them: each check downloads the grades CSV of the
+`.tex` and PDF assignments (PDF submission times come from it, so PDFs are never
+downloaded), and exports the `.tex` assignment when its submissions have changed.
+
+Without it, exports come from an inbox: download the Gradescope export `.zip` files into
 `data/input/inbox/<assignment name>/`, e.g. `data/input/inbox/ME461_HW1/`. Drop in both
 the `.tex` and the PDF assignment's exports. No unzipping or renaming. For a late
 submission, re-export and drop the new zip in. It merges with what is already there.
@@ -81,9 +105,60 @@ up after that email, you are flagged to decide whether to apply it.
 A student with no first pass at all who submits corrections gets the usual "no original
 submission" report.
 
-## Feedback: sent or held
+## Gradescope
 
-With `auto_send_feedback` on, a report is emailed as soon as it is generated, unless
+Sign in once; LaTA keeps the session (in `~/.lata/gradescope-profile/session.json`,
+readable only by you) and never sees your password:
+
+```bash
+uv sync --extra gradescope && uv run playwright install chromium   # first time only
+uv run --extra gradescope python -m lata.gradescope login           # opens a browser window
+```
+
+When the session expires, LaTA emails you (`notify_email`) and fetches nothing until you
+run `login` again. `python -m lata.gradescope check` tests it.
+
+**Entering grades.** Each graded student's score goes into the PDF assignment's largest
+question (or `gradescope: {..., question: "HW2"}`), which should be negatively scored, the
+way you would enter it: LaTA's points off -- its rubric total minus the report's final
+score, late penalty included -- as the point adjustment, or the zero-point "Correct"
+rubric item for a perfect score. A student who submitted a PDF but no `.tex` gets the
+rubric item worth minus the question's points (or that adjustment) once their notice has
+gone out; if they submit later, their real grade replaces it. Other questions are left
+for you.
+
+LaTA only writes to question submissions nobody has graded, or that it graded itself,
+and reads each grade back after saving. A grade already entered by hand that differs
+from LaTA's is left alone and reported to you; that student's feedback waits until you
+resolve it (and send it with `post_grading.py send-feedback`). Corrections are entered
+on the student's resubmitted PDF -- the new, ungraded submission -- so Gradescope keeps
+the first-pass grade in its history; incomplete corrections (no new PDF) are not entered.
+
+LaTA cannot tell handwritten or otherwise invalid work from its side of things; look
+through the submissions after feedback goes out.
+
+## Releasing feedback
+
+Feedback waits for you. When students' grades are on Gradescope, LaTA tells you (email
+and console) that feedback is ready. Then:
+
+1. grade the hand-graded questions on Gradescope,
+2. publish the grades on Gradescope,
+3. type `send ME461_HW1` (or just `send` for everything ready) into the running watcher.
+
+`send` checks that the assignment is published and that every waiting student is fully
+graded on Gradescope (it lists anyone who is not; `send ME461_HW1 --force` sends anyway),
+posts the grades to Canvas, and emails the reports. Students who submit later are graded
+and entered the same way, and wait for the next `send`.
+
+Other commands: `status`, `check` (check for submissions now), `help`. The watcher keeps
+checking for submissions while it waits for you to type.
+
+## Sending automatically
+
+With `auto_send_feedback: true` (or `--send`), a clean report is emailed as soon as it is
+generated -- for assignments with nothing graded by hand. Grades are still entered on
+Gradescope; publishing and the Canvas sync are left to you. A report is held back when
 something about it needs a person:
 
 - a problem failed to grade (schema errors after retries)
@@ -91,12 +166,12 @@ something about it needs a person:
 - possible prompt injection was detected
 - the report did not compile
 
-Held reports stay in the output folder. Look at them, fix what needs fixing, and send
-them with `post_grading.py send-feedback`. With auto-sending off, every report waits for
-`send-feedback`.
+Held reports (in either mode) stay in the output folder. Look at them, fix what needs
+fixing, and send them with `post_grading.py send-feedback`.
 
 Students graded before the watcher started (by plain `grade.py`) are recognised from
-their reports and never graded twice. They are also never emailed automatically.
+their reports and never graded twice. Their grades are entered on Gradescope like
+anyone's, and they are included when you `send`, but never emailed automatically.
 
 ## Hearing from it
 
