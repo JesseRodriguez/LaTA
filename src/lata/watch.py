@@ -56,8 +56,8 @@ import yaml
 
 from lata.inbox import prepare_from_inbox
 from lata.ingest import StudentSubmission
-from lata.ledger import (Ledger, Policy, decide, gradescope_ts, iso, parse_ts, read_snapshot,
-                         student_key, utcnow)
+from lata.ledger import (Ledger, Policy, corrections_pdf_check, decide, gradescope_ts, iso,
+                         parse_ts, read_snapshot, student_key, submission_key, utcnow)
 from lata.pipeline import GradingOptions, grade_assignment, safe_name
 
 DEFAULTS = {
@@ -71,11 +71,6 @@ DEFAULTS = {
     'inbox_dir': 'data/input/inbox',
     'unload_model_after_idle_minutes': 120,
 }
-
-
-def submission_key(sid, email) -> str:
-    """student_key() for a StudentSubmission, whose missing SID reads 'None' or 'Unknown'."""
-    return student_key("" if str(sid) in ("None", "Unknown") else sid, email)
 
 
 @dataclass
@@ -412,15 +407,24 @@ class Watcher:
         return not result.interrupted
 
     def send_feedback(self, a: Assignment, ledger: Ledger, now, events: Events):
+        emailer = self.emailer(a)
+        if a.corrections:
+            # Whether each student resubmitted their PDF, from the latest exports
+            emailer.corrections_pdf_check = corrections_pdf_check(a.base, self.pdf_metadata_for(a))
         for key, st in ledger.students.items():
             graded = st.get("graded")
             if (not graded or graded.get("seeded") or st.get("held") or st.get("feedback_sent_at")
                     or not st.get("report") or not Path(st["report"]).exists()):
                 continue
-            student = SimpleNamespace(student_name=st.get("name"), student_email=st.get("email"))
-            if self.emailer(a).send_single_feedback(student, Path(st["report"])):
+            student = SimpleNamespace(student_name=st.get("name"), student_email=st.get("email"),
+                                      student_sid=st.get("sid", ""))
+            if emailer.send_single_feedback(student, Path(st["report"])):
                 st["feedback_sent_at"] = iso(now)
-                events.info.append(f"{a.name}: feedback sent to {st.get('name')}")
+                incomplete = emailer.missing_corrections_pdf(student)
+                if incomplete:
+                    st["corrections_not_applied"] = True
+                events.info.append(f"{a.name}: feedback sent to {st.get('name')}"
+                                   + (" (no new PDF: told corrections grade is not applied)" if incomplete else ""))
             else:
                 events.attention.append(f"{a.name}: could not send feedback to {st.get('name')}")
 

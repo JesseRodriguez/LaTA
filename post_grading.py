@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import List
 from src.lata.ingest import GradescopeIngestor
 from src.lata.emailer import FeedbackEmailer
+from src.lata.ledger import corrections_pdf_check
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
@@ -814,6 +815,24 @@ def send_feedback(config_path: str = "config.yaml",
         output_dir=str(output_dir),
         is_corrections_mode=is_corrections_mode
     )
+
+    # Corrections without a resubmitted PDF are incomplete and the corrections grade is
+    # not applied; their email says so
+    if is_corrections_mode:
+        pdf_metadata = Path(config['paths']['export_dir']) / 'pdf_submission_metadata.yml'
+        check = corrections_pdf_check(base_assignment, pdf_metadata)
+        if check is None:
+            print(f"⚠️  No {pdf_metadata}: cannot tell who resubmitted their PDF, so no email "
+                  f"will say the corrections grade is not applied.")
+            print()
+        else:
+            emailer.corrections_pdf_check = check
+            missing = [s.student_name for s in ingest_result.submissions
+                       if check(s.student_name, s.student_sid, s.student_email) is False]
+            if missing:
+                print(f"📭 {len(missing)} student(s) did not resubmit their PDF; their email will say "
+                      f"the corrections grade will NOT be applied")
+                print()
 
     # 4. Authenticate (skip if dry-run)
     if not dry_run:

@@ -51,7 +51,7 @@ the first pass's folder (`inbox/ME461_HW1/`). Both assignments use it.
 | Situation | What LaTA does |
 |---|---|
 | `.tex` and PDF in, deadline passed | Grades it once the student has gone 15 min without resubmitting, charging the later of the two submission times |
-| `.tex` in, no PDF | Once the deadline and an hour after the `.tex` have both passed, emails *"PDF missing - late penalty accruing"*. Grades when the PDF arrives. |
+| `.tex` in, no PDF | Once the deadline and an hour after the `.tex` have both passed, emails *"PDF missing - late penalty accruing"*. Grades when the PDF arrives. (Corrections: see below.) |
 | PDF in, no `.tex` | Emails *".tex missing"* on the same schedule |
 | Submitted to the `.tex` assignment without a `.tex` file | Same `.tex` notice if there is a PDF; otherwise flags it to you |
 | Already graded, then submits a new `.tex` | Flags it to you. Never regraded automatically. |
@@ -72,6 +72,11 @@ This also catches the late first pass that is easy to miss: a student who submit
 main assignment for the first time after corrections have opened. They have no graded
 first pass, so their submission is graded as a (late) first pass, not mistaken for a
 correction. Their corrections wait until that first pass is graded.
+
+A corrections `.tex` without a new PDF is incomplete. It is still graded at the
+corrections deadline, but the feedback email tells the student that, because they did not
+resubmit their compiled PDF, their corrections grade will not be applied. If the PDF turns
+up after that email, you are flagged to decide whether to apply it.
 
 A student with no first pass at all who submits corrections gets the usual "no original
 submission" report.

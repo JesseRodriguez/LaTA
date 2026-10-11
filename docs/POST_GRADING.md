@@ -309,6 +309,16 @@ When the assignment name ends with `_CORRECTIONS`, the emailer operates in
 corrections mode. This is detected automatically and passed to the `FeedbackEmailer`
 so that email subjects and body text can reflect the corrections context.
 
+A corrections submission is only complete if the student also resubmitted their
+compiled PDF. `send-feedback` checks the corrections export's
+`pdf_submission_metadata.yml` for a PDF newer than the student's original submission
+time (from the original assignment's `grading_metadata.yaml`, or the watcher's ledger).
+Students without one are listed in the preview, and their email says that because they
+did not resubmit the PDF, their corrections grade will not be applied. Without
+`pdf_submission_metadata.yml` this check is skipped, with a warning. Change the wording
+with `corrections_no_pdf_subject_template` and `corrections_no_pdf_body_template` under
+`email:` (variables `{student_name}`, `{assignment_name}`).
+
 ### CLI Usage
 
 ```

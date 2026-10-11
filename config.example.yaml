@@ -205,6 +205,10 @@ email:
   # missing_tex_body_template: |
   #   Hello {student_name},
   #   ...
+  #
+  # Corrections feedback for students who did not resubmit their compiled PDF says their
+  # corrections grade will not be applied. Override with corrections_no_pdf_subject_template
+  # and corrections_no_pdf_body_template (same variables).
 
   # Error Handling and Delivery Settings
   max_retries: 3                   # Retry failed sends up to 3 times

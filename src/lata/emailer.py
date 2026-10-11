@@ -95,20 +95,22 @@ If you believe you already submitted it, please contact your instructor or TA.
 
 Best regards,
 LaTA Grading System"""),
-    # Corrections: a corrections .tex file but no new PDF
-    'missing_pdf_corrections': (
-        "ACTION REQUIRED: {assignment_name} PDF missing",
-        """Hello {student_name},
+}
 
-We received your corrections .tex file for {assignment_name}, but no new PDF was submitted to the PDF assignment on Gradescope.
+# Corrections feedback for a student who did not resubmit their compiled PDF: the
+# corrections submission is incomplete, so the corrections grade is not applied.
+# Override with email.corrections_no_pdf_subject_template / corrections_no_pdf_body_template.
+CORRECTIONS_NO_PDF_SUBJECT = "{assignment_name} corrections graded - PDF not resubmitted, corrections not applied"
+CORRECTIONS_NO_PDF_BODY = """Hello {student_name},
 
-Your corrections cannot be graded until your PDF is submitted, and lateness is determined by the later of your two submissions. Please submit your PDF as soon as possible.
+Your corrected submission for {assignment_name} has been graded. Please see the attached PDF for detailed feedback from the LaTA evaluation system.
 
-If you believe you already submitted it, please contact your instructor or TA.
+IMPORTANT: You did not resubmit your compiled PDF to the linked Canvas assignment, so your corrections submission is incomplete and your corrections grade will NOT be applied to the assignment.
+
+If you have questions about your grade, please contact your instructor or TA.
 
 Best regards,
-LaTA Grading System"""),
-}
+LaTA Grading System"""
 
 # Kept for anything importing the old names
 DEFAULT_MISSING_TEX_SUBJECT, DEFAULT_MISSING_TEX_BODY = NOTICE_TEMPLATES['missing_tex']
@@ -173,6 +175,15 @@ class FeedbackEmailer:
         )
         self.from_name = self.email_config.get('from_name', 'LaTA Grading System')
         self.body_template = self.email_config.get('body_template', '')
+        self.corrections_no_pdf_subject_template = self.email_config.get(
+            'corrections_no_pdf_subject_template', CORRECTIONS_NO_PDF_SUBJECT)
+        self.corrections_no_pdf_body_template = self.email_config.get(
+            'corrections_no_pdf_body_template', CORRECTIONS_NO_PDF_BODY)
+        # Corrections mode: (name, sid, email) -> True if a PDF newer than the student's
+        # original submission exists, False if not, None if it cannot be told. Set by the
+        # caller (post_grading.py send-feedback, the watcher); see
+        # lata.ledger.corrections_pdf_check. None means no check.
+        self.corrections_pdf_check = None
         self.notice_templates = {
             kind: (self.email_config.get(f'{kind}_subject_template', subject),
                    self.email_config.get(f'{kind}_body_template', body))
@@ -373,26 +384,27 @@ class FeedbackEmailer:
         print(f"✅ AppleScript email ready to send from: {from_account}")
         print()
 
-    def _create_email_message(self, student: StudentSubmission, pdf_path: Path) -> EmailMessage:
-        """
-        Construct MIME email message with PDF attachment.
+    def missing_corrections_pdf(self, student) -> bool:
+        """Corrections mode: did this student fail to resubmit their compiled PDF?"""
+        if not self.is_corrections_mode or self.corrections_pdf_check is None:
+            return False
+        return self.corrections_pdf_check(student.student_name, getattr(student, 'student_sid', ''),
+                                          student.student_email) is False
 
-        Args:
-            student: StudentSubmission object
-            pdf_path: Path to feedback PDF
-
-        Returns:
-            EmailMessage ready to send
-        """
-        msg = EmailMessage()
-
-        # Email headers
+    def _compose_feedback(self, student) -> tuple:
+        """Subject and body of a feedback email."""
         assignment_name = self.grading_config.get('assignment_name', 'Assignment')
 
         # Use different subject and body for corrections mode
         if self.is_corrections_mode:
-            # Corrections mode: indicate final grade
             base_name = assignment_name.replace('_CORRECTIONS', '')
+            if self.missing_corrections_pdf(student):
+                # Incomplete: no new PDF, so the corrections grade is not applied
+                return (self.corrections_no_pdf_subject_template.format(assignment_name=base_name),
+                        self.corrections_no_pdf_body_template.format(
+                            student_name=student.student_name, assignment_name=base_name))
+
+            # Corrections mode: indicate final grade
             subject = f"{base_name} corrections have been graded - final grade"
 
             # Corrections email body
@@ -406,13 +418,30 @@ If you have questions about your grade, please contact your instructor or TA.
 
 Best regards,
 LaTA Grading System"""
-        else:
-            # Normal mode: use configured templates
-            subject = self.subject_template.format(assignment_name=assignment_name)
-            body = self.body_template.format(
-                student_name=student.student_name,
-                assignment_name=assignment_name
-            )
+            return subject, body
+
+        # Normal mode: use configured templates
+        subject = self.subject_template.format(assignment_name=assignment_name)
+        body = self.body_template.format(
+            student_name=student.student_name,
+            assignment_name=assignment_name
+        )
+        return subject, body
+
+    def _create_email_message(self, student: StudentSubmission, pdf_path: Path) -> EmailMessage:
+        """
+        Construct MIME email message with PDF attachment.
+
+        Args:
+            student: StudentSubmission object
+            pdf_path: Path to feedback PDF
+
+        Returns:
+            EmailMessage ready to send
+        """
+        msg = EmailMessage()
+
+        subject, body = self._compose_feedback(student)
 
         msg['Subject'] = subject
         msg['From'] = f"{self.from_name} <{self.from_email}>"
@@ -597,33 +626,7 @@ LaTA Grading System"""
     def _send_via_applescript(self, student: StudentSubmission, pdf_path: Path, retry_count: int) -> bool:
         """Send email via AppleScript (Mac Mail.app)"""
 
-        # Prepare email content
-        assignment_name = self.grading_config.get('assignment_name', 'Assignment')
-
-        # Use different subject and body for corrections mode
-        if self.is_corrections_mode:
-            # Corrections mode: indicate final grade
-            base_name = assignment_name.replace('_CORRECTIONS', '')
-            subject = f"{base_name} corrections have been graded - final grade"
-
-            # Corrections email body
-            body = f"""Hello {student.student_name},
-
-Your corrected submission for {base_name} has been graded. Please see the attached PDF for detailed feedback from the LaTA evaluation system.
-
-This feedback represents your final grade on this assignment, including any points recovered through corrections and your original late penalty (if applicable).
-
-If you have questions about your grade, please contact your instructor or TA.
-
-Best regards,
-LaTA Grading System"""
-        else:
-            # Normal mode: use configured templates
-            subject = self.subject_template.format(assignment_name=assignment_name)
-            body = self.body_template.format(
-                student_name=student.student_name,
-                assignment_name=assignment_name
-            )
+        subject, body = self._compose_feedback(student)
 
         # Send via AppleScript
         success, error = send_email_via_applescript(
@@ -801,10 +804,21 @@ LaTA Grading System"""
             pdf_size = pdf_path.stat().st_size / 1024  # KB
             print(f"{i+1:3d}. {student.student_name:<30} → {student.student_email}")
             print(f"     PDF: {pdf_path.name} ({pdf_size:.1f} KB)")
+            if self.missing_corrections_pdf(student):
+                print("     ⚠️  No new PDF: email says the corrections grade will NOT be applied")
             print()
 
         if len(pdf_matches) > preview_limit:
             print(f"... and {len(pdf_matches) - preview_limit} more students")
+            print()
+
+        no_pdf = [student for student, _ in pdf_matches if self.missing_corrections_pdf(student)]
+        if no_pdf:
+            print(f"Corrections without a new PDF -- {len(no_pdf)} student(s) will be told their "
+                  f"corrections grade will NOT be applied:")
+            print()
+            for student in no_pdf:
+                print(f"     {student.student_name:<30} → {student.student_email}")
             print()
 
         if notices:

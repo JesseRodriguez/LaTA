@@ -40,7 +40,9 @@ Rules, per student, for an assignment (not yet graded unless stated):
   graded, newer .tex  flag for the instructor; never regraded automatically
 For a _CORRECTIONS assignment, a PDF counts only if it is newer than the student's frozen
 first-pass time, and a corrections .tex from a student whose first pass exists but is not
-graded yet waits for it. A student with no first pass at all is graded straight away,
+graded yet waits for it. A corrections .tex without a new PDF is still graded at the
+deadline -- the submission is incomplete, and the feedback email says the corrections
+grade will not be applied (a PDF arriving afterwards is flagged). A student with no first pass at all is graded straight away,
 which in corrections mode produces the "no original submission" report.
 """
 
@@ -127,6 +129,11 @@ def student_key(sid, email) -> str:
     return sid if sid else str(email or "").strip().lower()
 
 
+def submission_key(sid, email) -> str:
+    """student_key() for a StudentSubmission, whose missing SID reads 'None' or 'Unknown'."""
+    return student_key("" if str(sid) in ("None", "Unknown") else sid, email)
+
+
 def _clean(data):
     if isinstance(data, dict):
         return {str(k).lstrip(':'): _clean(v) for k, v in data.items()}
@@ -183,6 +190,59 @@ def read_snapshot(export_dir: Path, pdf_metadata: Optional[Path] = None) -> Dict
                 s.pdf = Submission(id=str(sub_key), created_at=created)
 
     return {k: v for k, v in students.items() if k}
+
+
+def first_pass_times(base: str, output_root: Path = Path("data/output")):
+    """(key, name) -> a student's frozen first-pass submission time on assignment `base`.
+
+    From the watcher's ledger when it graded them; otherwise from grading_metadata.yaml,
+    where the reporter recorded the later of the .tex and PDF times at grading. None when
+    the student has no graded first pass.
+    """
+    base_dir = Path(output_root) / f"{base}_Feedback"
+    ledger = Ledger(base_dir) if (base_dir / STATE_FILE).exists() else None
+    meta_path = base_dir / "grading_metadata.yaml"
+    meta = (yaml.safe_load(meta_path.read_text()) or {}) if meta_path.exists() else {}
+
+    def lookup(key: str, name: str) -> Optional[datetime]:
+        if ledger is not None:
+            status, frozen = ledger.first_pass(key)
+            if status == "graded" and frozen:
+                return frozen
+        safe = name.replace(" ", "_").replace("(", "").replace(")", "")
+        return parse_ts((meta.get(safe) or {}).get('submission_created_at'))
+    return lookup
+
+
+def corrections_pdf_check(base: str, pdf_metadata: Path, output_root: Path = Path("data/output")):
+    """For corrections feedback: did each student resubmit their compiled PDF?
+
+    Returns check(name, sid, email) -> True if the PDF assignment's metadata shows a PDF
+    newer than the student's first-pass submission time, False if it does not, and None
+    when that cannot be told (no first pass on record). Returns None instead of a check
+    when there is no PDF metadata to look in.
+    """
+    pdf_metadata = Path(pdf_metadata)
+    if not pdf_metadata.exists():
+        return None
+    latest: Dict[str, datetime] = {}
+    for sub in _load_meta(pdf_metadata).values():
+        if not isinstance(sub, dict):
+            continue
+        created = parse_ts(sub.get('created_at'))
+        for submitter in sub.get('submitters') or []:
+            key = student_key(submitter.get('sid'), submitter.get('email'))
+            if created and key and (key not in latest or created > latest[key]):
+                latest[key] = created
+    first_pass = first_pass_times(base, output_root)
+
+    def check(name: str, sid, email) -> Optional[bool]:
+        key = submission_key(sid, email)
+        first = first_pass(key, name)
+        if first is None:
+            return None
+        return key in latest and latest[key] > first
+    return check
 
 
 # --------------------------------------------------------------------------------------
@@ -260,7 +320,7 @@ class Ledger:
             # Deliveries made outside the watcher (post_grading.py send-feedback) count too
             if name in (delivery.get('delivered') or {}) and not st.get("feedback_sent_at"):
                 st["feedback_sent_at"] = delivery['delivered'][name].get('sent_at') or "before watcher"
-            for kind in ("missing_tex", "missing_pdf", "missing_tex_corrections", "missing_pdf_corrections"):
+            for kind in ("missing_tex", "missing_pdf", "missing_tex_corrections"):
                 if name in (delivery.get(f'{kind}_notified') or {}):
                     st.setdefault("notices", {}).setdefault(kind, delivery[f'{kind}_notified'][name].get('sent_at'))
 
@@ -368,6 +428,14 @@ def decide(ledger: Ledger, snapshot: Dict[str, StudentSnapshot], policy: Policy,
                 flag(s, f"resubmission:{s.tex.id}:{iso(s.tex.created_at)}",
                      f"submitted a new .tex at {iso(s.tex.created_at)} UTC after being graded "
                      f"(graded submission from {iso(graded_tex)} UTC). Not regraded.")
+            if policy.corrections and not graded.get("seeded") and not graded.get("pdf_created_at") \
+                    and s.pdf is not None and policy.first_pass is not None:
+                status, frozen = policy.first_pass(key)
+                if status == "graded" and frozen and s.pdf.created_at > frozen:
+                    flag(s, f"late-corrections-pdf:{s.pdf.id}",
+                         f"resubmitted their PDF at {iso(s.pdf.created_at)} UTC, after corrections "
+                         f"feedback went out saying the corrections grade would not be applied "
+                         f"without it. Decide whether to apply it.")
             continue
 
         if s.tex is not None and not s.tex.has_tex and s.pdf is None:
@@ -387,8 +455,9 @@ def decide(ledger: Ledger, snapshot: Dict[str, StudentSnapshot], policy: Policy,
                     grade_when_ready(s, max(s.tex.created_at, pdf.created_at), pdf,
                                      max(s.tex.created_at, pdf.created_at))
                 else:
-                    notice(s, "missing_pdf", max(deadline, s.tex.created_at + policy.notice_after),
-                           "corrections .tex, no new PDF")
+                    # No new PDF: the corrections are incomplete. Graded anyway at the
+                    # deadline; the feedback email says the grade will not be applied.
+                    grade_when_ready(s, s.tex.created_at, None, s.tex.created_at)
             elif pdf and status == "graded":
                 notice(s, "missing_tex", max(deadline, pdf.created_at + policy.notice_after),
                        "new PDF, no corrections .tex")
