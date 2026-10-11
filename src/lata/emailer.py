@@ -36,11 +36,11 @@ from typing import List, Dict, Optional
 from email.message import EmailMessage
 
 import yaml
-from src.lata.ingest import StudentSubmission
+from lata.ingest import StudentSubmission
 
 # Import AppleScript mailer for macOS
 try:
-    from src.lata.applescript_mailer import (
+    from lata.applescript_mailer import (
         send_email_via_applescript,
         test_mail_configuration,
         get_mail_accounts
@@ -50,10 +50,14 @@ except ImportError:
     APPLESCRIPT_AVAILABLE = False
 
 
-# Sent to students who submitted a PDF but no .tex file, so there was nothing to grade.
-# Override with email.missing_tex_subject_template / missing_tex_body_template in config.yaml.
-DEFAULT_MISSING_TEX_SUBJECT = "{assignment_name}: your .tex file is missing"
-DEFAULT_MISSING_TEX_BODY = """Hello {student_name},
+# Notices to students whose submission is incomplete, so there is nothing to grade yet.
+# Each kind can be overridden with email.<kind>_subject_template / <kind>_body_template in
+# config.yaml, using {student_name} and {assignment_name}.
+NOTICE_TEMPLATES = {
+    # Submitted a PDF but no .tex file (send-feedback, and the watcher)
+    'missing_tex': (
+        "{assignment_name}: your .tex file is missing",
+        """Hello {student_name},
 
 We received your PDF submission for {assignment_name}, but no matching .tex file was submitted to the LaTeX assignment on Gradescope, so your work could not be graded.
 
@@ -62,7 +66,52 @@ Please submit your .tex file as soon as possible. Without it you will receive a 
 If you believe you already submitted it, please contact your instructor or TA.
 
 Best regards,
-LaTA Grading System"""
+LaTA Grading System"""),
+    # Submitted a .tex file but no PDF (the watcher)
+    'missing_pdf': (
+        "ACTION REQUIRED: {assignment_name} PDF missing - late penalty accruing",
+        """Hello {student_name},
+
+We received your .tex file for {assignment_name}, but no matching PDF was submitted to the PDF assignment on Gradescope.
+
+YOUR SUBMISSION IS INCOMPLETE AND A LATE PENALTY IS ACCRUING RIGHT NOW. Lateness is determined by the later of your two submissions, so the penalty keeps growing until your PDF is submitted. Your feedback will not be released until then.
+
+Please submit your PDF as soon as possible.
+
+If you believe you already submitted it, please contact your instructor or TA.
+
+Best regards,
+LaTA Grading System"""),
+    # Corrections: a new PDF but no corrections .tex file
+    'missing_tex_corrections': (
+        "{assignment_name}: your corrections .tex file is missing",
+        """Hello {student_name},
+
+We received a new PDF for {assignment_name}, but no matching .tex file was submitted to the corrections assignment on Gradescope, so your corrections cannot be graded.
+
+Please submit your corrections .tex file as soon as possible.
+
+If you believe you already submitted it, please contact your instructor or TA.
+
+Best regards,
+LaTA Grading System"""),
+    # Corrections: a corrections .tex file but no new PDF
+    'missing_pdf_corrections': (
+        "ACTION REQUIRED: {assignment_name} PDF missing",
+        """Hello {student_name},
+
+We received your corrections .tex file for {assignment_name}, but no new PDF was submitted to the PDF assignment on Gradescope.
+
+Your corrections cannot be graded until your PDF is submitted, and lateness is determined by the later of your two submissions. Please submit your PDF as soon as possible.
+
+If you believe you already submitted it, please contact your instructor or TA.
+
+Best regards,
+LaTA Grading System"""),
+}
+
+# Kept for anything importing the old names
+DEFAULT_MISSING_TEX_SUBJECT, DEFAULT_MISSING_TEX_BODY = NOTICE_TEMPLATES['missing_tex']
 
 
 class FeedbackEmailer:
@@ -77,7 +126,8 @@ class FeedbackEmailer:
     - Support for test recipient filtering
     """
 
-    def __init__(self, config_path: str = "config.yaml", output_dir: str = None, is_corrections_mode: bool = False):
+    def __init__(self, config_path: str = "config.yaml", output_dir: str = None, is_corrections_mode: bool = False,
+                 config: dict = None):
         """
         Initialize emailer with configuration.
 
@@ -85,10 +135,12 @@ class FeedbackEmailer:
             config_path: Path to config.yaml
             output_dir: Output directory for feedback PDFs and delivery tracking
             is_corrections_mode: If True, use corrections email template
+            config: Already-loaded configuration; used instead of reading config_path
         """
         # Load configuration
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        if config is None:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
 
         self.config = config
         self.email_config = config.get('email', {})
@@ -121,10 +173,11 @@ class FeedbackEmailer:
         )
         self.from_name = self.email_config.get('from_name', 'LaTA Grading System')
         self.body_template = self.email_config.get('body_template', '')
-        self.missing_tex_subject_template = self.email_config.get(
-            'missing_tex_subject_template', DEFAULT_MISSING_TEX_SUBJECT)
-        self.missing_tex_body_template = self.email_config.get(
-            'missing_tex_body_template', DEFAULT_MISSING_TEX_BODY)
+        self.notice_templates = {
+            kind: (self.email_config.get(f'{kind}_subject_template', subject),
+                   self.email_config.get(f'{kind}_body_template', body))
+            for kind, (subject, body) in NOTICE_TEMPLATES.items()
+        }
 
         # Error handling settings
         self.max_retries = self.email_config.get('max_retries', 3)
@@ -612,52 +665,102 @@ LaTA Grading System"""
                 )
                 return False
 
-    def send_missing_tex_notice(self, student: Dict, dry_run: bool = False) -> bool:
-        """Tell a student who submitted a PDF but no .tex file that nothing could be graded.
+    def _display_assignment_name(self) -> str:
+        name = self.grading_config.get('assignment_name', 'Assignment')
+        if name.endswith('_CORRECTIONS'):
+            return name[:-len('_CORRECTIONS')] + " corrections"
+        return name
 
-        `student` is an entry from GradescopeIngestor.find_pdf_only_submitters(). No
-        attachment. Tracked under missing_tex_notified in email_delivery.yaml, apart from
-        feedback deliveries, so a later run neither resends it nor counts it as feedback.
+    def _send_plain(self, to: str, subject: str, body: str) -> tuple:
+        """Send one email without an attachment. Returns (ok, error)."""
+        if self.email_backend == 'applescript':
+            return send_email_via_applescript(
+                to=to, subject=subject, body=body,
+                attachment_path=None, from_account=self.from_email)
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = f"{self.from_name} <{self.from_email}>"
+        msg['To'] = to
+        msg.set_content(body)
+        try:
+            self.smtp_connection.send_message(msg)
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+    def send_plain_email(self, to: str, subject: str, body: str) -> bool:
+        """Send a plain email (e.g. a status message to the instructor), with retries."""
+        error = None
+        for attempt in range(self.max_retries + 1):
+            ok, error = self._send_plain(to, subject, body)
+            if ok:
+                return True
+            if attempt < self.max_retries:
+                time.sleep(self.retry_delay * (2 ** attempt))
+        print(f"❌ Could not email {to}: {error}")
+        return False
+
+    def ensure_connection(self) -> bool:
+        """Reconnect to the SMTP server if the session has dropped, using the credentials
+        given at startup (kept in memory only). A long-running watcher needs this: servers
+        close idle connections. Always True for AppleScript, which has no session."""
+        if self.email_backend != 'smtp' or self.smtp_connection is None:
+            return True
+        try:
+            if self.smtp_connection.noop()[0] == 250:
+                return True
+        except Exception:
+            pass
+        if not (self.username and self.password):
+            return False
+        try:
+            self.authenticate(username=self.username, password=self.password)
+            return True
+        except Exception:
+            return False
+
+    def send_missing_tex_notice(self, student: Dict, dry_run: bool = False) -> bool:
+        """Tell a student who submitted a PDF but no .tex file that nothing could be graded."""
+        return self.send_notice(student, 'missing_tex', dry_run=dry_run)
+
+    def notice_sent(self, student_name: str, kind: str) -> bool:
+        key = student_name.replace(" ", "_").replace("(", "").replace(")", "")
+        return key in self.delivery_data.get(f'{kind}_notified', {})
+
+    def send_notice(self, student: Dict, kind: str, dry_run: bool = False) -> bool:
+        """Email a student that their submission is incomplete (see NOTICE_TEMPLATES).
+
+        `student` needs 'name' and 'email' (an entry from
+        GradescopeIngestor.find_pdf_only_submitters() works). No attachment. Tracked under
+        <kind>_notified in email_delivery.yaml, apart from feedback deliveries, so a later
+        run neither resends it nor counts it as feedback.
         """
         name, email = student['name'], student['email']
         key = name.replace(" ", "_").replace("(", "").replace(")", "")
-        notified = self.delivery_data.setdefault('missing_tex_notified', {})
-        failed = self.delivery_data.setdefault('missing_tex_failed', {})
+        notified = self.delivery_data.setdefault(f'{kind}_notified', {})
+        failed = self.delivery_data.setdefault(f'{kind}_failed', {})
+        label = kind.replace('_', ' ').replace('missing tex', 'missing .tex').replace('missing pdf', 'missing PDF')
 
         if not self._validate_email(email):
-            print(f"❌ {name}: Invalid email address '{email}' (missing .tex notice)")
+            print(f"❌ {name}: Invalid email address '{email}' ({label} notice)")
             failed[key] = {'email': email, 'attempts': 1, 'last_error': "Invalid email address format"}
             self._save_delivery_tracking()
             return False
 
         if dry_run:
-            print(f"[DRY-RUN] Would send missing .tex notice to {name} ({email})")
+            print(f"[DRY-RUN] Would send {label} notice to {name} ({email})")
             return True
 
-        assignment_name = self.grading_config.get('assignment_name', 'Assignment')
-        subject = self.missing_tex_subject_template.format(assignment_name=assignment_name)
-        body = self.missing_tex_body_template.format(student_name=name,
-                                                     assignment_name=assignment_name)
+        subject_template, body_template = self.notice_templates[kind]
+        assignment_name = self._display_assignment_name()
+        subject = subject_template.format(assignment_name=assignment_name)
+        body = body_template.format(student_name=name, assignment_name=assignment_name)
 
         error = None
         for attempt in range(self.max_retries + 1):
-            if self.email_backend == 'applescript':
-                ok, error = send_email_via_applescript(
-                    to=email, subject=subject, body=body,
-                    attachment_path=None, from_account=self.from_email)
-            else:
-                msg = EmailMessage()
-                msg['Subject'] = subject
-                msg['From'] = f"{self.from_name} <{self.from_email}>"
-                msg['To'] = email
-                msg.set_content(body)
-                try:
-                    self.smtp_connection.send_message(msg)
-                    ok = True
-                except Exception as e:
-                    ok, error = False, str(e)
+            ok, error = self._send_plain(email, subject, body)
             if ok:
-                print(f"📨 {name} ({email}): missing .tex notice sent")
+                print(f"📨 {name} ({email}): {label} notice sent")
                 notified[key] = {'email': email,
                                  'sent_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                  'reason': student.get('reason', '')}
@@ -669,7 +772,7 @@ LaTA Grading System"""
                 print(f"⚠️  {name}: Send failed ({error}), retrying in {delay}s...")
                 time.sleep(delay)
 
-        print(f"❌ {name}: missing .tex notice failed after {self.max_retries + 1} attempts - {error}")
+        print(f"❌ {name}: {label} notice failed after {self.max_retries + 1} attempts - {error}")
         failed[key] = {'email': email, 'attempts': self.max_retries + 1, 'last_error': error}
         self._save_delivery_tracking()
         return False

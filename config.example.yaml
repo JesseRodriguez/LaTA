@@ -228,6 +228,41 @@ email:
   # Delivery tracking is saved to: data/output/{ASSIGNMENT}_Feedback/email_delivery.yaml
 
 # ------------------------------------------------------------------------------------
+# WATCHING SEVERAL ASSIGNMENTS (optional) -- see docs/WATCHING.md
+# ------------------------------------------------------------------------------------
+# List assignments here and `uv run grade.py` keeps running, grading each submission once
+# the deadline has passed and it is complete (.tex and PDF), emailing missing-file notices,
+# and flagging anything odd to you, until you press Ctrl-C. Each entry overrides
+# paths.export_dir (data/input/<name>), paths.rubric_file, paths.solution_file,
+# grading.assignment_name and grading.late_penalties.due_date; everything else above is
+# shared. A name ending in _CORRECTIONS is graded in corrections mode once its first
+# pass has been.
+#
+# assignments:
+#   - name: ME461_HW1
+#     rubric_file: ME461_HW1_rubric.yaml             # in paths.rubrics_dir
+#     solution_file: data/solutions/ME461-HW1-SOLUTION.tex
+#     due_date: "2026-10-09 06:59:59"                 # GMT
+#   - name: ME461_HW1_CORRECTIONS
+#     rubric_file: ME461_HW1_rubric.yaml
+#     solution_file: data/solutions/ME461-HW1-SOLUTION.tex
+#     due_date: "2026-10-16 06:59:59"
+#     # watch_until: "2026-10-20 06:59:59"            # stop checking after this (GMT)
+#     # grading: {subject: "Heat Transfer"}           # any other per-assignment overrides
+#
+# watch:
+#   auto_send_feedback: false     # email clean reports as soon as they are ready
+#                                 # (--send / --no-send override this for one run)
+#   send_notices: true            # "PDF missing" / ".tex missing" emails to students
+#   notify_email: null            # where to send "needs your attention" emails
+#   poll_minutes: 10              # how often to check for new submissions
+#   settle_minutes: 15            # wait this long after a student's last submission
+#   notice_after_hours: 1         # ...and this long before a missing-file notice
+#   unload_model_after_idle_minutes: 120
+#   source: inbox                 # Gradescope .zip exports in <inbox_dir>/<assignment>/
+#   inbox_dir: data/input/inbox
+
+# ------------------------------------------------------------------------------------
 # HOW ERROR RECOVERY WORKS:
 # ------------------------------------------------------------------------------------
 #

@@ -145,6 +145,21 @@ def _merge_metadata(existing: Path, incoming_bytes: bytes) -> tuple:
             current = yaml.safe_load(existing.read_text()) or {}
         except Exception:
             current = {}
+    # A student who resubmitted appears in the newer export under a new submission key;
+    # their old entry has to go, or they would be in the metadata twice
+    def who(entry):
+        subs = (entry or {}).get(':submitters') or (entry or {}).get('submitters') or []
+        if not subs:
+            return None
+        s = subs[0]
+        sid = s.get(':sid', s.get('sid'))
+        email = s.get(':email', s.get('email'))
+        return str(sid).strip() if sid else (str(email).strip().lower() if email else None)
+
+    incoming_people = {who(v): k for k, v in incoming.items() if who(v)}
+    for k in [k for k, v in current.items()
+              if who(v) in incoming_people and incoming_people[who(v)] != k]:
+        del current[k]
     added = sum(1 for k in incoming if k not in current)
     updated = len(incoming) - added
     current.update(incoming)
