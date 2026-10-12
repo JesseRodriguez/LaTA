@@ -25,6 +25,25 @@ from openai import OpenAI
 
 # Import validation module
 
+def late_days_and_fraction(submission_created_at: str, due_date_str: str, penalty_per_day: float,
+                           extension_hours: float = 0) -> tuple:
+    """(days late, penalty fraction) for a submission time, as the report computes them.
+
+    Times are GMT: the due date as "2026-01-17 07:59:59", the submission in Gradescope's
+    format ("2026-01-17 04:15:54.397486000 Z"). Any fraction of a day counts as a full
+    day (24h 0m 1s late = 2 days); the fraction is capped at 1. Shared with the watcher,
+    which needs the same number for reports whose penalty was not recorded.
+    """
+    from datetime import datetime, timedelta
+    due_date = datetime.strptime(due_date_str, "%Y-%m-%d %H:%M:%S") + timedelta(hours=extension_hours or 0)
+    submission_dt = datetime.strptime(submission_created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
+    seconds = (submission_dt - due_date).total_seconds()
+    if seconds <= 0:
+        return 0, 0.0
+    days_late = int(seconds / 86400) + 1
+    return days_late, min(days_late * penalty_per_day, 1.0)
+
+
 class LatexReporter:
     # LaTeX auxiliary file extensions to clean up
     LATEX_AUX_EXTENSIONS = ['.aux', '.log', '.out', '.toc', '.lof', '.lot', '.fls', '.fdb_latexmk', '.synctex.gz']
@@ -155,36 +174,20 @@ class LatexReporter:
             return result
 
         try:
-            from datetime import datetime, timedelta
-
-            # Parse due date (format: "2026-01-17 07:59:59")
-            base_due_date = datetime.strptime(self.due_date_str, "%Y-%m-%d %H:%M:%S")
-
-            # Adjust due date if student has extension
             if extension_hours > 0:
-                due_date = base_due_date + timedelta(hours=extension_hours)
-                print(f"   📅 Extension: +{extension_hours}h → new due date: {due_date}")
-            else:
-                due_date = base_due_date
+                from datetime import datetime, timedelta
+                due = datetime.strptime(self.due_date_str, "%Y-%m-%d %H:%M:%S") + timedelta(hours=extension_hours)
+                print(f"   📅 Extension: +{extension_hours}h → new due date: {due}")
 
-            # Parse submission timestamp (Gradescope format: "2026-01-17 04:15:54.397486000 Z")
-            # Strip microseconds and timezone indicator
-            submission_dt = datetime.strptime(submission_created_at.split('.')[0], "%Y-%m-%d %H:%M:%S")
-
-            # Calculate time difference
-            time_diff = submission_dt - due_date
+            days_late, penalty_percentage = late_days_and_fraction(
+                submission_created_at, self.due_date_str, self.penalty_per_day, extension_hours)
 
             # If submitted before or exactly at deadline, no penalty
-            if time_diff.total_seconds() <= 0:
+            if days_late == 0:
                 return result
-
-            # Calculate days late (round UP - any fraction of a day counts as full day)
-            # 24 hours and 1 second = 2 days late
-            days_late = int(time_diff.total_seconds() / 86400) + 1  # Always round up
 
             # Calculate penalty based on TOTAL maximum score (rubric + manual grading)
             # e.g., 20% of (50 rubric + 10 plots) = 12 points deducted per day
-            penalty_percentage = min(days_late * self.penalty_per_day, 1.0)  # Cap at 100%
             total_max_score = max_score + self.points_awarded_elsewhere
             points_deducted = total_max_score * penalty_percentage
             final_score = total_score - points_deducted  # Allow negative scores
@@ -936,6 +939,11 @@ class LatexReporter:
         if fix_attempt == 0:
             safe_name = grade_result.student_name.replace(" ", "_").replace("(", "").replace(")", "") if grade_result.student_name else grade_result.student_id.replace(" ", "_").replace("(", "").replace(")", "")
 
+            # A --regrade skips _get_version_suffix, which is what creates the entry; without
+            # one, the penalty shown on this report used to go unrecorded
+            if safe_name not in self.grading_metadata:
+                self.grading_metadata[safe_name] = {
+                    'submission_created_at': submission_created_at or 'Unknown', 'version': 1}
             if safe_name in self.grading_metadata:
                 # Extract extra credit awarded (for corrections workflow)
                 extra_credit_earned = self._extract_extra_credit_metadata(grade_result)

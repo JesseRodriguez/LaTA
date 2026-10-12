@@ -345,13 +345,30 @@ class Watcher:
             graded = st.get("graded")
             name = st.get("name", key)
             if graded and not st.get("held") and st.get("report"):
-                if rec.get("kind") == "score" and rec.get("status") in ("entered", "match", "not-applied"):
+                if rec.get("status") == "not-applied":
                     continue
                 if pdf_check and pdf_check(name, st.get("sid"), st.get("email")) is False:
                     st["gradescope"] = {"kind": "score", "status": "not-applied"}
                     continue                 # incomplete corrections: grade is not entered
-                final, max_score = final_score_for(a, name, st.get("sid", ""))
+                charged = graded.get("effective")
+                if not charged and key in self.snapshots.get(a.name, {}):
+                    s = self.snapshots[a.name][key]
+                    times = [x.created_at for x in (s.tex, s.pdf) if x is not None]
+                    charged = max(times) if times else None
+                final, max_score, note = final_score_for(a, name, st.get("sid", ""), charged)
+                if rec.get("kind") == "score" and rec.get("status") in ("entered", "match"):
+                    # Already on Gradescope: only revisit if LaTA's number has changed since
+                    if final is None or abs(round(final - (max_score or 0), 2) - float(rec.get("lata_points", rec.get("points", 0)))) < 1e-6:
+                        continue
+                    note = (note + "; " if note else "") + "score differs from what was entered"
+                if final is None:
+                    self.attention_once(events, f"{a.name}: {name}: grade not entered ({note}); enter it by hand")
+                    continue
+                if note:
+                    events.info.append(f"{a.name}: {name}: {note}")
                 entry = self.grade_entry.enter(a, st, rows, final, max_score=max_score, dry_run=self.dry_run)
+                if entry.record is not None:
+                    entry.record["lata_points"] = round(final - (max_score or 0), 2)
             elif (not graded and not a.corrections and rec.get("kind") != "zero"
                   and (st.get("notices") or {}).get("missing_tex", "").startswith("20")):
                 entry = self.grade_entry.enter(a, st, rows, None, zero=True, dry_run=self.dry_run)

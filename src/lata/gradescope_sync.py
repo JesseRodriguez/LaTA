@@ -249,8 +249,10 @@ class GradeEntry:
                   "kind": "zero" if zero else "score"}
         current = float(page['submission'].get('score') or 0.0)
         graded = bool(page['submission'].get('graded'))
-        ours = (st.get('gradescope') or {}).get('qsid') == qsid and \
-            abs(float((st.get('gradescope') or {}).get('expected_score', -1e9)) - current) < 1e-6
+        prev = st.get('gradescope') or {}
+        # LaTA's own entry, still as it left it (a "match" was someone else's grade)
+        ours = prev.get('status') == 'entered' and prev.get('qsid') == qsid and \
+            abs(float(prev.get('expected_score', -1e9)) - current) < 1e-6
         if graded and abs(current - expected) < 1e-6:
             return Entry("match", f"already {current:g} on Gradescope", record)
         if graded and not ours:
@@ -283,25 +285,29 @@ def rubric_total(a) -> float:
                      for item in section.get('items', []) if not item.get('is_extra_credit', False)))
 
 
-def final_score_for(a, name: str, sid: str) -> Tuple[Optional[float], Optional[float]]:
-    """(final score, max score) from the student's report record.
+def final_score_for(a, name: str, sid: str, charged_at=None) -> Tuple[Optional[float], Optional[float], str]:
+    """(final score, max score, note) from the student's report record.
 
-    grading_metadata.yaml has them for anything graded since they were recorded; for
-    older reports they are rebuilt from the saved per-problem results and the recorded
-    late penalty, the same way the report computed them."""
+    grading_metadata.yaml has them for anything graded since they were recorded. Older
+    reports are rebuilt from the saved per-problem results and the recorded late penalty.
+    A report whose penalty was never recorded (a --regrade could skip it) gets the penalty
+    recalculated from `charged_at`, the submission time the report used -- never 0% by
+    default. (None, None, why) when the score cannot be established.
+    """
+    from lata.reporter import late_days_and_fraction
     out = Path(f"data/output/{a.name}_Feedback")
     meta_path = out / "grading_metadata.yaml"
     meta = (yaml.safe_load(meta_path.read_text()) or {}) if meta_path.exists() else {}
     safe = name.replace(" ", "_").replace("(", "").replace(")", "")
     m = meta.get(safe) or {}
     if 'final_score' in m:
-        return float(m['final_score']), float(m.get('max_score') or 0) or None
+        return float(m['final_score']), float(m.get('max_score') or 0) or None, ""
     if a.corrections:
-        return None, None              # corrections restore extra credit; do not guess
+        return None, None, "corrections report without a recorded final score"
     debug = out / "debug" / f"{name} ({sid})"
     results = sorted(debug.glob("*/result.json")) if debug.exists() else []
     if not results:
-        return None, None
+        return None, None, "no saved grading results to rebuild the score from"
     total = max_score = 0.0
     for path in results:
         for item in json.loads(path.read_text()).get("items", []):
@@ -309,6 +315,21 @@ def final_score_for(a, name: str, sid: str) -> Tuple[Optional[float], Optional[f
             if not item.get("is_extra_credit"):
                 max_score += float(item.get("max_score", 0))
     late = a.config.get('grading', {}).get('late_penalties', {})
-    pct = float(m.get('late_penalty', 0.0) or 0.0)
     elsewhere = float(late.get('points_awarded_elsewhere', 0) or 0)
-    return round(total - pct * (max_score + elsewhere), 4), max_score
+    note = ""
+    if 'late_penalty' in m:
+        pct = float(m.get('late_penalty') or 0.0)
+    elif not late.get('enabled') or not late.get('due_date'):
+        pct = 0.0
+    else:
+        when = parse_ts(m.get('submission_created_at') if m.get('submission_created_at') not in (None, 'Unknown')
+                        else charged_at)
+        if when is None:
+            return None, None, "late penalty not recorded and submission time unknown"
+        extensions_path = Path(a.config['paths']['export_dir']) / "extensions.yaml"
+        extensions = (yaml.safe_load(extensions_path.read_text()) or {}) if extensions_path.exists() else {}
+        days, pct = late_days_and_fraction(gradescope_ts(when), late['due_date'],
+                                           float(late.get('penalty_per_day', 0.2)),
+                                           float(extensions.get(name, 0) or 0))
+        note = f"late penalty not recorded; recalculated as {pct:.0%} ({days} day(s) late)"
+    return round(total - pct * (max_score + elsewhere), 4), max_score, note
