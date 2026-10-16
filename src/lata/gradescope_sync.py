@@ -39,6 +39,7 @@ emails the feedback.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -285,14 +286,37 @@ def rubric_total(a) -> float:
                      for item in section.get('items', []) if not item.get('is_extra_credit', False)))
 
 
-def final_score_for(a, name: str, sid: str, charged_at=None) -> Tuple[Optional[float], Optional[float], str]:
-    """(final score, max score, note) from the student's report record.
+_FINAL = re.compile(r"\\textbf\{Final Score:\}\s*&\s*\\textbf\{(-?[\d.]+)\}")
+_TOTAL = re.compile(r"\\textbf\{TOTAL\}\s*&\s*\\textbf\{(-?[\d.]+)\}\s*&\s*(-?[\d.]+)")
 
-    grading_metadata.yaml has them for anything graded since they were recorded. Older
-    reports are rebuilt from the saved per-problem results and the recorded late penalty.
-    A report whose penalty was never recorded (a --regrade could skip it) gets the penalty
-    recalculated from `charged_at`, the submission time the report used -- never 0% by
-    default. (None, None, why) when the score cannot be established.
+
+def score_from_report(report: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
+    """(final score, max score) as printed on a feedback report, read from its LaTeX
+    source (kept in the output folder's logs/ after compiling). The final score is the
+    late-penalty line when there is one, otherwise the TOTAL row."""
+    if not report:
+        return None, None
+    pdf = Path(report)
+    for tex in (pdf.parent / "logs" / f"{pdf.stem}.tex", pdf.with_suffix(".tex")):
+        if tex.exists():
+            text = tex.read_text(errors="replace")
+            total = _TOTAL.search(text)
+            final = _FINAL.search(text)
+            if total:
+                return float(final.group(1) if final else total.group(1)), float(total.group(2))
+    return None, None
+
+
+def final_score_for(a, name: str, sid: str, charged_at=None,
+                    report: Optional[str] = None) -> Tuple[Optional[float], Optional[float], str, bool]:
+    """(final score, max score, note, authoritative) for a student's feedback report.
+
+    In order: the final score the reporter recorded in grading_metadata.yaml (every report
+    since that was added), the score printed on the report itself, and only then a rebuild
+    from the per-problem results. A rebuild depends on today's late-penalty settings, which
+    may differ from those the report used, so it is not authoritative: it may fill in a
+    missing grade, but never revise one already entered. (None, None, why, False) when the
+    score cannot be established.
     """
     from lata.reporter import late_days_and_fraction
     out = Path(f"data/output/{a.name}_Feedback")
@@ -301,13 +325,16 @@ def final_score_for(a, name: str, sid: str, charged_at=None) -> Tuple[Optional[f
     safe = name.replace(" ", "_").replace("(", "").replace(")", "")
     m = meta.get(safe) or {}
     if 'final_score' in m:
-        return float(m['final_score']), float(m.get('max_score') or 0) or None, ""
+        return float(m['final_score']), float(m.get('max_score') or 0) or None, "", True
+    final, max_score = score_from_report(report)
+    if final is not None:
+        return final, max_score, "", True
     if a.corrections:
-        return None, None, "corrections report without a recorded final score"
+        return None, None, "corrections report without a recorded final score", False
     debug = out / "debug" / f"{name} ({sid})"
     results = sorted(debug.glob("*/result.json")) if debug.exists() else []
     if not results:
-        return None, None, "no saved grading results to rebuild the score from"
+        return None, None, "no report source or saved results to read the score from", False
     total = max_score = 0.0
     for path in results:
         for item in json.loads(path.read_text()).get("items", []):
@@ -316,7 +343,7 @@ def final_score_for(a, name: str, sid: str, charged_at=None) -> Tuple[Optional[f
                 max_score += float(item.get("max_score", 0))
     late = a.config.get('grading', {}).get('late_penalties', {})
     elsewhere = float(late.get('points_awarded_elsewhere', 0) or 0)
-    note = ""
+    note = "rebuilt from saved results (report source not found)"
     if 'late_penalty' in m:
         pct = float(m.get('late_penalty') or 0.0)
     elif not late.get('enabled') or not late.get('due_date'):
@@ -325,11 +352,11 @@ def final_score_for(a, name: str, sid: str, charged_at=None) -> Tuple[Optional[f
         when = parse_ts(m.get('submission_created_at') if m.get('submission_created_at') not in (None, 'Unknown')
                         else charged_at)
         if when is None:
-            return None, None, "late penalty not recorded and submission time unknown"
+            return None, None, "late penalty not recorded and submission time unknown", False
         extensions_path = Path(a.config['paths']['export_dir']) / "extensions.yaml"
         extensions = (yaml.safe_load(extensions_path.read_text()) or {}) if extensions_path.exists() else {}
         days, pct = late_days_and_fraction(gradescope_ts(when), late['due_date'],
                                            float(late.get('penalty_per_day', 0.2)),
                                            float(extensions.get(name, 0) or 0))
-        note = f"late penalty not recorded; recalculated as {pct:.0%} ({days} day(s) late)"
-    return round(total - pct * (max_score + elsewhere), 4), max_score, note
+        note += f"; late penalty not recorded, recalculated as {pct:.0%} ({days} day(s) late)"
+    return round(total - pct * (max_score + elsewhere), 4), max_score, note, False

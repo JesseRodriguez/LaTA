@@ -152,6 +152,7 @@ LaTA/
 │   ├── emailer.py              #   SMTP email backend
 │   ├── applescript_mailer.py   #   macOS Mail.app backend
 │   └── validate_and_fix_scores.py  # Score consistency checks
+├── tests/                      # Made-up-student tests: uv run python tests/run_all.py
 ├── templates/
 │   └── feedback_report.tex     # Jinja2 LaTeX template for feedback PDFs
 ├── gradescope_autograder/      # Companion Gradescope validator

@@ -114,6 +114,16 @@ class Events:
     attention: List[str] = field(default_factory=list)
 
 
+def _merge(base: dict, override: dict):
+    """Deep-merge override into base: `grading: {late_penalties: {points_awarded_elsewhere: 4}}`
+    on one assignment changes that one value, not the whole late_penalties block."""
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+
+
 def build_assignments(config: dict) -> List[Assignment]:
     """Turn the `assignments:` list into full per-assignment configs, and check them."""
     problems, result = [], []
@@ -139,7 +149,7 @@ def build_assignments(config: dict) -> List[Assignment]:
         if entry.get('due_date'):
             late['due_date'] = entry['due_date']
         for section in ('paths', 'grading'):                 # any other per-assignment overrides
-            cfg[section].update(entry.get(section) or {})
+            _merge(cfg[section], entry.get(section) or {})
 
         due = parse_ts(late.get('due_date'))
         corrections = name.endswith('_CORRECTIONS')
@@ -355,10 +365,13 @@ class Watcher:
                     s = self.snapshots[a.name][key]
                     times = [x.created_at for x in (s.tex, s.pdf) if x is not None]
                     charged = max(times) if times else None
-                final, max_score, note = final_score_for(a, name, st.get("sid", ""), charged)
+                final, max_score, note, authoritative = final_score_for(
+                    a, name, st.get("sid", ""), charged, report=st.get("report"))
                 if rec.get("kind") == "score" and rec.get("status") in ("entered", "match"):
-                    # Already on Gradescope: only revisit if LaTA's number has changed since
-                    if final is None or abs(round(final - (max_score or 0), 2) - float(rec.get("lata_points", rec.get("points", 0)))) < 1e-6:
+                    # Already on Gradescope: revisit only if the report's own number differs
+                    # from what was entered (a rebuilt number is never grounds to change it)
+                    if final is None or not authoritative or abs(round(final - (max_score or 0), 2)
+                                                                 - float(rec.get("lata_points", rec.get("points", 0)))) < 1e-6:
                         continue
                     note = (note + "; " if note else "") + "score differs from what was entered"
                 if final is None:
