@@ -56,6 +56,27 @@ hand-graded questions and published the grades, type `send`.
    graded, entered on Gradescope (and how that compares with grades already there),
    notified and sent -- without doing any of it.
 
+## Adding assignments from Gradescope
+
+Rather than copying IDs and due dates from Gradescope by hand:
+
+```bash
+uv run python -m lata.setup_watch            # add to config.watch.yaml (or --config FILE)
+uv run python -m lata.setup_watch --list     # only show what is on Gradescope
+```
+
+It lists the course's `.tex` assignments, each paired with its PDF assignment by title
+("Homework #2 (561) .tex file" with "Homework #2 (561)"; corrections, "... .tex file
+(CORRECTIONS)", with the original homework's PDF assignment), and marks those already in
+the config. Pick the ones to add; for each it suggests the LaTA name, rubric and solution
+from `data/rubrics` and `data/solutions` and the due date from Gradescope (converted to
+GMT), all of which you can change. Titles without a course number belong to the course
+number in the Gradescope course name that no other title carries ("ME 461/561" with
+"(561)" titles elsewhere: 461). It shows the entries before writing them, keeps the rest
+of the file as it is, and warns about anything that would stop the watcher starting (a
+missing rubric or solution, a corrections assignment whose first pass is neither listed
+nor graded).
+
 ## Getting submissions in
 
 With `source: gradescope`, LaTA fetches them: each check downloads the grades CSV of the

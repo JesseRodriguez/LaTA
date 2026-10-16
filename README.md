@@ -146,6 +146,7 @@ LaTA/
 │   ├── ledger.py               #   Per-student state and the watcher's rules
 │   ├── gradescope.py           #   Gradescope session (login, exports, grades, Canvas)
 │   ├── gradescope_sync.py      #   Fetching from and entering grades on Gradescope
+│   ├── setup_watch.py          #   Adds Gradescope assignments to the watch config
 │   ├── segmenter.py            #   Problem extraction via LLM
 │   ├── grader.py               #   LLM-based rubric evaluation
 │   ├── reporter.py             #   PDF generation and error recovery
