@@ -352,6 +352,7 @@ class Watcher:
         from lata.gradescope_sync import final_score_for
         rows = self.source.pdf_rows.get(a.name, [])
         pdf_check = corrections_pdf_check(a.base, self.pdf_metadata_for(a)) if a.corrections else None
+        problems: Dict[Optional[str], List[str]] = {}
         for key, st in ledger.students.items():
             rec = st.get("gradescope") or {}
             graded = st.get("graded")
@@ -398,9 +399,19 @@ class Watcher:
                 continue                     # tried again when their PDF shows up
             elif entry.status == "conflict":
                 st["gradescope"] = {"kind": "score", "status": "conflict", "message": entry.message}
-                self.attention_once(events, f"{a.name}: {name}: {entry.message}")
+                problems.setdefault(entry.message if "already graded" not in entry.message else None, []).append(name)
             else:
-                self.attention_once(events, f"{a.name}: {name}: could not enter grade: {entry.message}")
+                problems.setdefault(f"could not enter grade: {entry.message}", []).append(name)
+        # One message per problem, not per student: a setup issue hits the whole class
+        for message, names in problems.items():
+            if message is None:
+                continue                             # differing hand-entered grades: listed below, one each
+            who = names[0] if len(names) == 1 else f"{len(names)} students ({', '.join(names[:3])}{', ...' if len(names) > 3 else ''})"
+            self.attention_once(events, f"{a.name}: {who}: {message}")
+        for key, st in ledger.students.items():
+            rec = st.get("gradescope") or {}
+            if rec.get("status") == "conflict" and "already graded" in rec.get("message", ""):
+                self.attention_once(events, f"{a.name}: {st.get('name', key)}: {rec['message']}")
 
     # -- release -----------------------------------------------------------------------
 

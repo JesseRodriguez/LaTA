@@ -140,10 +140,12 @@ When the session expires, LaTA emails you (`notify_email`) and fetches nothing u
 run `login` again. `python -m lata.gradescope check` tests it.
 
 **Entering grades.** Each graded student's score goes into the PDF assignment's largest
-question (or `gradescope: {..., question: "HW2"}`), which should be negatively scored, the
-way you would enter it: LaTA's points off -- its rubric total minus the report's final
+question (or `gradescope: {..., question: "HW2"}`), the way you would enter it. On a
+negatively scored question (recommended): LaTA's points off -- its rubric total minus the report's final
 score, late penalty included -- as the point adjustment, or the zero-point "Correct"
-rubric item for a perfect score. A student who submitted a PDF but no `.tex` gets the
+rubric item for a perfect score; on a positively scored one, the score itself as the
+adjustment -- Gradescope shows the same number either way. A student who submitted a PDF
+but no `.tex` gets the
 rubric item worth minus the question's points (or that adjustment) once their notice has
 gone out; if they submit later, their real grade replaces it. Other questions are left
 for you.

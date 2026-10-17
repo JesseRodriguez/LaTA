@@ -214,25 +214,26 @@ class GradeEntry:
         page = self.gs.grading_page(self.course, question.id, qsid)
 
         weight = float(page['question']['weight'])
-        if page['question'].get('scoring_type') != 'negative':
-            return Entry("conflict", f"question {question.title!r} is not negatively scored; LaTA only "
-                                     f"enters points off on negatively scored questions")
+        # Negative scoring starts at full marks: enter the points off. Positive scoring
+        # starts at zero: enter the score itself. Either way Gradescope shows the same.
+        negative = page['question'].get('scoring_type') == 'negative'
         items = page.get('rubric_items') or []
         rubric = {int(i['id']): False for i in items}
         if zero:
             wipe = next((i for i in items if abs(float(i['weight']) + weight) < 1e-6), None)
-            if wipe:
+            if wipe and negative:
                 rubric[int(wipe['id'])] = True
                 points = 0.0
             else:
-                points = -weight
+                points = -weight if negative else 0.0
             target = 0.0
         else:
             # Points off as on the report: LaTA's total minus the final score (late penalty
             # included), whatever the question itself is worth
-            points = round(float(final_score) - float(max_score), 2)
-            target = weight + points
-            if abs(points) < 1e-9:
+            off = round(float(final_score) - float(max_score), 2)
+            target = weight + off
+            points = off if negative else round(target, 2)
+            if negative and abs(off) < 1e-9:
                 full = [i for i in items if abs(float(i['weight'])) < 1e-9]
                 full.sort(key=lambda i: 0 if any(w in i['description'].lower() for w in ('correct', 'full')) else 1)
                 if full:

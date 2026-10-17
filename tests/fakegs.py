@@ -26,6 +26,7 @@ class FakeGS:
         self.canvas_posts = 0
         self.saves = []
         self.exports = 0
+        self.scoring = "negative"
 
     def row(self, sid, sub):
         first, last = NAMES[sid].split()
@@ -51,7 +52,8 @@ class FakeGS:
         e = self.evals.get(qsid)
         if not e or not e["graded"]:
             return 0.0
-        return max(0.0, WEIGHT + sum(-WEIGHT for r in e["rubric"] if r == 2) + e["points"])
+        base = WEIGHT if self.scoring == "negative" else 0.0
+        return max(0.0, base + sum(-WEIGHT for r in e["rubric"] if r == 2) + e["points"])
 
     def grading_page(self, course, q, qsid):
         e = self.evals.get(qsid, {"graded": False, "points": 0.0, "rubric": set()})
@@ -59,7 +61,7 @@ class FakeGS:
                 "evaluation": {"points": str(e["points"])},
                 "rubric_items": [{"id": 1, "description": "Correct", "weight": "0.0"},
                                  {"id": 2, "description": "No .tex", "weight": str(-WEIGHT)}],
-                "question": {"weight": str(WEIGHT), "scoring_type": "negative", "floor": True, "ceiling": False},
+                "question": {"weight": str(WEIGHT), "scoring_type": self.scoring, "floor": True, "ceiling": False},
                 "assignment": {"published": self.published}}
 
     def save_grade(self, course, q, qsid, rubric, points, comments=None):
