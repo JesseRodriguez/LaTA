@@ -32,7 +32,7 @@ class StudentSubmission(BaseModel):
     """
     Represents a single student's work, sanitized for the pipeline.
     """
-    internal_id: str          # The Gradescope submission ID (e.g., "376213776")
+    internal_id: str          # The Gradescope submission ID (e.g., "123456789")
     anonymized_id: str        # The hash we show the LLM (e.g., "a1b2c3d4")
 
     # Metadata (kept for reporting, HIDDEN from LLM)
@@ -150,7 +150,7 @@ class GradescopeIngestor:
         Load per-student deadline extensions from extensions.yaml.
 
         Returns dict mapping student_name → extension_hours:
-            {"Benjamin Stewart": 24, "Rachel Wu": 48}
+            {"Jane Doe": 24, "John Smith": 48}
 
         If file doesn't exist, returns empty dict.
         """

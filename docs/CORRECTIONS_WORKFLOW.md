@@ -1,5 +1,9 @@
 # Corrections Workflow Guide
 
+> **With the watcher (v2.0.0):** add the corrections assignment with `setup_watch` and it is
+> graded, entered on Gradescope and released like any other -- see the
+> [User Guide](USER_GUIDE.md#8-corrections). This page describes corrections mode itself.
+
 This document describes the corrections workflow in LaTA: a second grading pass
 that allows students to recover points on problems they originally got wrong.
 Corrections are graded against the same rubric but with specific rules around

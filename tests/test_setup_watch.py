@@ -93,4 +93,10 @@ add_entries(Path("c2.yaml"), [S.entry_text("ME461_HW2", "ME461_HW2_rubric.yaml",
 c2 = yaml.safe_load(Path("c2.yaml").read_text())
 check(c2["assignments"][0]["gradescope"] == {"tex": 3, "pdf": 1} and c2["watch"]["source"] == "gradescope" and c2["watch"]["gradescope"]["course"] == 42,
       "creates the assignments list and a gradescope watch block when missing")
+
+# A watch config that does not exist yet starts as a copy of config.yaml
+answers = iter([""])                      # cancel at the menu
+builtins.input = lambda prompt="": next(answers)
+S.main(["--config", "config.new.yaml"])
+check(Path("config.new.yaml").read_text() == Path("config.yaml").read_text(), "a new watch config starts from config.yaml's settings")
 fx.done()

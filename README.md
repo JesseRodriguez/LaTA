@@ -1,6 +1,25 @@
 # LaTA: Large Language Teaching Assistant
 
-LaTA is an automated grading pipeline for LaTeX-based STEM assignments. It ingests bulk submissions from Gradescope, grades them against a reference solution and rubric using a local open-source LLM (via Ollama), and generates individualized PDF feedback reports for each student.
+LaTA grades LaTeX-based STEM homework with a local open-source LLM. It reads student
+submissions from Gradescope, grades each problem against your reference solution and
+rubric, and produces an individual PDF feedback report per student. Left running, it
+fetches submissions from Gradescope as they arrive, grades them once they are due,
+enters the grades on Gradescope, and emails the feedback when you release it.
+
+> [!NOTE]
+> **Reference setup — what LaTA is developed and run on in production (v2.0.0, Fall 2026)**
+>
+> | | |
+> |---|---|
+> | **Hardware** | Apple Mac Studio, M3 Ultra, **256 GB** unified memory (macOS 26) |
+> | **Grading model** | **Qwen3.8-Flash-Next**, Unsloth GGUF **UD-Q4_K_XL** ([`unsloth/Qwen3.8-Flash-Next-GGUF`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF), ~104 GB, plus `mmproj-F16`), served by llama.cpp's `llama-server`, which LaTA starts itself (`grader.model: "Qwen"`) |
+> | **Model settings** | 4 slots (`grading.concurrency: 4`), 32k context per slot, `reasoning_effort: low`, temperature 0.1, top_p 0.9, presence_penalty 0.2, max_tokens 16384, **no** repeat penalty, **no** reasoning budget, flash attention auto — all applied automatically for this model |
+> | **Segmentation model** | `gpt-oss:20b` via Ollama (only needed when a submission's problems cannot be found by pattern) |
+> | **Typical throughput** | **about 40 problems per hour** with 4 slots — roughly 13 students an hour on a three-problem assignment |
+>
+> Other hardware and models work (see [Getting Started](docs/GETTING_STARTED.md)), but this is
+> the configuration that has graded full classes end to end. Smaller machines need smaller
+> models; LaTA has only been tested on Apple Silicon.
 
 ```
 LaTA Grading System - Automated grading workflow using open-source LLMs.
@@ -20,50 +39,58 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 ```
 
+**New in v2.0.0:** a watcher that runs unattended from deadline to feedback, Gradescope
+integration (fetching submissions, entering grades, Canvas sync), parallel grading with a
+live dashboard, and models served automatically. See the [release notes](RELEASE_NOTES.md)
+and the [User Guide](docs/USER_GUIDE.md).
+
 ---
 
 ## How It Works
 
-LaTA processes assignments through a four-stage pipeline:
+Each submission goes through four stages:
 
-1. **Ingest** -- Parses a Gradescope export directory, extracts student metadata and LaTeX source files, and sanitizes content.
-2. **Segment** -- A fast LLM (e.g., `gpt-oss:20b`) extracts individual problem sections from each student's monolithic `.tex` file so they can be graded independently.
-3. **Grade** -- A reasoning LLM (e.g., `gpt-oss:120b`) evaluates each problem section against the reference solution and rubric, producing structured JSON with scores, internal audit notes, and student-facing Socratic hints.
-4. **Report** -- Results are rendered into a LaTeX feedback template, compiled to PDF, and organized per student. Late penalties, extra credit, and score validation are applied automatically.
+1. **Ingest** -- Reads the Gradescope export: student metadata, the LaTeX source, and the submission times of both the `.tex` and the PDF assignment (late penalties use the later of the two).
+2. **Segment** -- Splits each student's `.tex` file into problems, by pattern (`\Prob{N}`, `\section{...}`) or, failing that, with a small LLM.
+3. **Grade** -- A reasoning LLM grades each problem against the reference solution and rubric, returning structured JSON: a score per rubric item, an internal audit note for the instructor, and a Socratic hint for the student. Scores are checked against the rubric before they are used.
+4. **Report** -- Results are rendered into a LaTeX feedback report and compiled to PDF, with late penalties and extra credit applied.
 
-After grading, post-processing tools handle TA workload splitting, feedback auditing, email distribution, and a full corrections workflow for resubmissions.
+Around that pipeline, LaTA can run in two ways:
+
+- **Watching** (new) -- List a term's assignments and leave `grade.py` running. It fetches submissions from Gradescope, grades each student once the deadline has passed and both files are in, enters the grades on Gradescope, emails students whose submission is incomplete, and sends feedback when you release it. Late submissions and corrections are handled the same way, until you stop it.
+- **One assignment at a time** -- Export from Gradescope, drop the `.zip` files in a folder, run `grade.py`, then send feedback with `post_grading.py`.
 
 ---
 
 ## Key Features
 
-- **Fully local inference** -- All LLM calls go to a local model server. No student data leaves your machine.
-- **Name a model, and it is served** -- Point `grader.model` at an Ollama model or a GGUF file; GGUF models get their own `llama-server` started and stopped around the run, configured from the architecture in the file.
-- **Reasoning model support** -- Native support for `<think>`-tag models (DeepSeek-R1, QwQ, GPT-OSS) with automatic chain-of-thought extraction.
-- **Chunk-based grading** -- Each problem is graded independently for better accuracy and debuggability.
-- **Dual feedback** -- Internal instructor audit notes (what the LLM actually saw) and student-facing Socratic hints (guiding without giving answers).
-- **Automatic error recovery** -- JSON schema validation with retry, LLM-based LaTeX compilation error fixing, and comprehensive failure logging.
-- **Prompt injection defense** -- Five-layer security system against students attempting to manipulate grades via embedded instructions.
-- **Late penalty engine** -- Configurable per-day penalties calculated from Gradescope timestamps, displayed on feedback PDFs.
-- **Corrections workflow** -- Re-grade student corrections against the same rubric while preserving original extra credit scores.
-- **Post-grading tools** -- Automated feedback auditing, TA workload splitting, and email distribution (SMTP or macOS Mail.app via AppleScript).
-- **Incremental grading** -- Skip previously graded students; grade new and late submissions without redoing work.
-- **Parallel grading** -- Grade several problems at once against a multi-slot LLM server, with a live terminal dashboard (per-slot progress, throughput, ETA, live reasoning). Stopped runs resume without regrading finished problems.
-- **Gradescope autograder** -- Companion validator that runs on Gradescope to check student `.tex` submissions for structural issues before they reach LaTA.
+- **Unattended watching** -- Grades submissions as they arrive, after the deadline, until you stop it; tracks every student across the `.tex` assignment, the PDF assignment and corrections, so late first passes and incomplete submissions are not missed.
+- **Gradescope integration** -- Fetches submissions (only when something changed), enters each grade in the point-adjustment field the way you would, checks the grades are published and complete, and posts them to Canvas when you release feedback. Uses a saved login (SSO works); no password is stored.
+- **You stay in control of release** -- Feedback waits until you have graded any hand-graded questions and published; then one `send` command posts to Canvas and emails everyone ready.
+- **Missing-file notices** -- Students who submit only the `.tex` or only the PDF are emailed (once) that their submission is incomplete and late penalties are accruing; corrections without a resubmitted PDF are told the corrections grade will not be applied.
+- **Parallel grading with a live dashboard** -- Several problems at once against a multi-slot model server, with per-slot progress, throughput, ETA and live reasoning. Stopped runs resume without regrading finished problems.
+- **Name a model, and it is served** -- `grader.model: "Qwen"` finds the GGUF file or Ollama model, starts `llama-server` with settings for that model's architecture, and stops it afterwards.
+- **Fully local inference** -- All LLM calls go to a model server on your machine. No student work leaves it.
+- **Any OpenAI-compatible server** -- llama.cpp, vLLM or LM Studio, as well as Ollama.
+- **Chunk-based grading with dual feedback** -- Each problem graded independently; internal audit notes for the instructor, Socratic hints for the student.
+- **Safety checks** -- Score validation against the rubric, prompt-injection defenses and flags, reports held for review when grading failed or looks suspicious.
+- **Late penalties, extensions and corrections** -- Per-day penalties from Gradescope timestamps (including hand-graded points), per-student extensions, and a corrections workflow that preserves original extra credit and late penalties.
+- **Post-grading tools** -- Feedback auditing, TA workload splitting, and email (SMTP or macOS Mail.app).
+- **Gradescope autograder** -- A companion validator that checks students' `.tex` submissions on Gradescope before they reach LaTA.
 
 ---
 
 ## Testing and Performance
 
-LaTA has been developed and tested at scale in production for the ME 373 (Numerical Methods) course at Oregon State University during Winter 2026. The only large-scale testing environment so far has been:
+LaTA has been used in production at Oregon State University: for ME 373 (Numerical Methods) in Winter 2026 -- 8 assignments, about 180 students each, graded with `gpt-oss:120b` -- and for ME 461/561 (Gas Dynamics) in Fall 2026 with the watcher and Gradescope integration, graded with Qwen3.8-Flash-Next (see the reference setup above).
 
-- **Hardware**: Apple Mac Studio, M3 Ultra, 256 GB unified memory
-- **Grading model**: `gpt-oss:120b` (120-billion-parameter open-source reasoning model, served via Ollama)
-- **Segmentation model**: `gpt-oss:20b`
-- **Throughput**: Approximately one problem per minute (wall-clock, including LLM inference, LaTeX compilation, and error recovery) grading one problem at a time; about 1.5x faster with `concurrency: 4` and `OLLAMA_NUM_PARALLEL=4` (see [Getting Started](docs/GETTING_STARTED.md#parallel-grading))
-- **Scale**: 8 homework assignments, approximately 180 students each, with 2--6 problems per assignment
+| Model | Slots | Throughput (M3 Ultra) |
+|---|---|---|
+| Qwen3.8-Flash-Next UD-Q4_K_XL (llama.cpp) | 4 | about 40 problems/hour |
+| `gpt-oss:120b` (Ollama) | 1 | about 1 problem/minute |
+| `gpt-oss:120b` (Ollama) | 4 | about 1.5x the single-slot rate |
 
-Other models (DeepSeek-R1:14b, QwQ:32b, Llama 3.1:8b) have been tested on smaller subsets and work with LaTA, but `gpt-oss:120b` is the only model that has been validated end-to-end at full class scale.
+Other models (DeepSeek-R1:14b, QwQ:32b, Llama 3.1:8b) have been tested on smaller subsets. A test suite with made-up students covers the watcher's rules, the Gradescope workflow (against a fake Gradescope) and the grading pipeline: `uv run python tests/run_all.py`.
 
 ---
 
@@ -72,45 +99,45 @@ Other models (DeepSeek-R1:14b, QwQ:32b, Llama 3.1:8b) have been tested on smalle
 ### Prerequisites
 
 - Python 3.14+ with [uv](https://docs.astral.sh/uv/)
-- A LaTeX distribution with `pdflatex` (`brew install mactex` on macOS, `texlive-full` on Linux)
-- [Ollama](https://ollama.ai) running locally with your chosen models pulled
+- A LaTeX distribution with `pdflatex` (`brew install --cask mactex` on macOS, `texlive-full` on Linux)
+- A model server: [llama.cpp](https://github.com/ggml-org/llama.cpp) (`llama-server`) for GGUF models, and/or [Ollama](https://ollama.com)
+- For the Gradescope integration: the `gradescope` extra (Playwright and its browser)
 
 ### Installation
 
 ```bash
-git clone https://github.com/jarodz/LaTA.git
+git clone https://github.com/JesseRodriguez/LaTA.git
 cd LaTA
-uv sync
+uv sync --extra gradescope                 # or just `uv sync` without Gradescope integration
+uv run playwright install chromium         # only for the Gradescope integration
+cp config.example.yaml config.yaml         # then set the grader model, email, late penalties
 ```
 
-### Five-Step Workflow
+### Watching a term's assignments (recommended)
 
 ```bash
-# 1. Download the Gradescope export(s) and drop the .zip files in data/input/inbox/
-#    (no unzipping or renaming; grade.py unpacks them, and re-exports merge)
-
-# 2. Create your rubric YAML and reference solution
-#    See data/rubrics/example_rubric.yaml for the format
-
-# 3. Configure LaTA
-cp config.example.yaml config.yaml
-#    Edit config.yaml: set paths, model names, due date, subject area
-
-# 4. Grade
-uv run python grade.py                          # Grade all students
-uv run python grade.py --student "Jane Doe"     # Test on one student first
-uv run python grade.py --concurrency 4          # Grade 4 problems at a time (live dashboard)
-
-# 5. Post-process
-uv run python post_grading.py audit             # Check for grading issues
-uv run python post_grading.py split-for-tas 3   # Split feedback for 3 TAs
-uv run python post_grading.py send-feedback      # Email feedback to students
+uv run python -m lata.gradescope login               # once: sign in to Gradescope in a browser window
+uv run python -m lata.setup_watch --config config.watch.yaml   # pick assignments; IDs and due dates are filled in
+uv run grade.py --config config.watch.yaml --dry-run # see what would happen, change nothing
+caffeinate -i uv run grade.py --config config.watch.yaml        # leave it running
+# ...when it says feedback is ready: grade hand-graded questions, publish, then type `send`
 ```
 
-Or list several assignments in `config.yaml` and `uv run grade.py` keeps watching them:
-it fetches submissions from Gradescope, grades them as they arrive (late ones included),
-enters the grades on Gradescope, and sends feedback when you release it (see [Watching
-Assignments](docs/WATCHING.md)).
+A new `config.watch.yaml` starts as a copy of your `config.yaml`, so model, email and
+late-penalty settings carry over. The [User Guide](docs/USER_GUIDE.md) walks through it all.
+
+### One assignment at a time
+
+```bash
+# 1. Download the Gradescope exports (.tex and PDF assignments) into data/input/inbox/
+# 2. Put the rubric in data/rubrics/ and the solution in data/solutions/
+#    (see data/rubrics/example_rubric.yaml for the format)
+# 3. Set paths, assignment name and due date in config.yaml
+uv run grade.py                              # grade (live dashboard with grading.concurrency > 1)
+uv run grade.py --student "Jane Doe"         # or test on one student first
+uv run python post_grading.py audit          # check for grading issues
+uv run python post_grading.py send-feedback  # email feedback
+```
 
 Output appears in `data/output/{assignment_name}_Feedback/` with individual PDFs, LaTeX source logs, and debug files.
 
@@ -120,6 +147,8 @@ Output appears in `data/output/{assignment_name}_Feedback/` with individual PDFs
 
 | Guide | Description |
 |-------|-------------|
+| [User Guide](docs/USER_GUIDE.md) | The watched workflow end to end: setup, each assignment, release, corrections, troubleshooting |
+| [Release Notes](RELEASE_NOTES.md) | What is new in each version, and how to upgrade |
 | [Getting Started](docs/GETTING_STARTED.md) | Detailed step-by-step setup, configuration reference, rubric writing guide, and troubleshooting |
 | [Watching Assignments](docs/WATCHING.md) | Leave LaTA running: it grades submissions as they arrive, sends notices and feedback, and handles corrections |
 | [Corrections Workflow](docs/CORRECTIONS_WORKFLOW.md) | How to re-grade student corrections while preserving original extra credit |
@@ -138,6 +167,7 @@ LaTA/
 ├── grade.py                    # Main entry point for grading
 ├── post_grading.py             # Post-grading tools (audit, TA splits, email)
 ├── config.example.yaml         # Configuration template
+├── RELEASE_NOTES.md            # What changed in each version
 ├── src/lata/                   # Core library
 │   ├── ingest.py               #   Gradescope export parsing
 │   ├── inbox.py                #   Unpacks Gradescope .zip exports
@@ -147,6 +177,8 @@ LaTA/
 │   ├── gradescope.py           #   Gradescope session (login, exports, grades, Canvas)
 │   ├── gradescope_sync.py      #   Fetching from and entering grades on Gradescope
 │   ├── setup_watch.py          #   Adds Gradescope assignments to the watch config
+│   ├── scheduler.py            #   Parallel grading and the live dashboard
+│   ├── serving.py              #   Finds a named model and serves it (llama-server)
 │   ├── segmenter.py            #   Problem extraction via LLM
 │   ├── grader.py               #   LLM-based rubric evaluation
 │   ├── reporter.py             #   PDF generation and error recovery
@@ -169,8 +201,9 @@ LaTA/
 
 ## Security and Privacy
 
-- **All inference is local.** Student submissions never leave your machine. Ollama runs entirely on localhost.
-- **Student data is git-ignored.** The `data/` directories containing submissions, output, and solutions are excluded from version control by default.
+- **All inference is local.** Student work is graded by a model server on your machine (llama.cpp or Ollama on localhost) and is never sent to an LLM service.
+- **Gradescope access is yours, and limited.** The Gradescope integration talks only to gradescope.com, as you, through a session you sign in to yourself; LaTA never sees your password. The session is stored in `~/.lata/gradescope-profile/session.json`, readable only by you. LaTA's writes are limited to saving the LaTA question's grade and posting grades to Canvas when you `send`; it never publishes, changes settings or deletes anything.
+- **Student data is git-ignored.** The `data/` directories containing submissions, output, and solutions are excluded from version control by default, as are `config.yaml` and other per-course `config.*.yaml` files.
 - **Prompt injection defenses** include security preambles, strong input delimiters, role reinforcement after student text, post-grading keyword scanning, and full debug transparency. See the [Getting Started guide](docs/GETTING_STARTED.md) for details.
 - **Anonymization** is available via `anonymize: true` in the configuration.
 

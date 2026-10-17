@@ -115,8 +115,8 @@ def extract_extra_credit(tex_content: str) -> dict:
 
 def extract_student_name(filename: str) -> str:
     """
-    Extract student name from filename like 'Feedback_Benjamin_Stewart.tex'
-    Returns: 'Benjamin_Stewart'
+    Extract student name from filename like 'Feedback_Jane_Doe.tex'
+    Returns: 'Jane_Doe'
     """
     # Remove 'Feedback_' prefix and '.tex' suffix
     name = filename.replace('Feedback_', '').replace('.tex', '')

@@ -1,5 +1,8 @@
 # Watching Assignments
 
+> For a step-by-step walkthrough of the watched workflow, see the [User Guide](USER_GUIDE.md).
+> This page is the reference for how the watcher decides what to do.
+
 Set up rubrics and solutions for a list of assignments, run `uv run grade.py`, and walk
 away. LaTA keeps running until you press Ctrl-C. It fetches submissions from Gradescope,
 grades each one once the deadline has passed and both files are in, enters the grade on

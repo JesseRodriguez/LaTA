@@ -279,6 +279,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     config_path = Path(args.config or ("config.watch.yaml" if Path("config.watch.yaml").exists() else "config.yaml"))
+    if not config_path.exists() and Path("config.yaml").exists():
+        # A new watch config starts from your normal settings (model, email, late penalties)
+        config_path.write_text(Path("config.yaml").read_text())
+        print(f"Created {config_path} from config.yaml; the assignments you pick are added to it.")
     config = (yaml.safe_load(config_path.read_text()) or {}) if config_path.exists() else {}
     course = args.course or ((config.get("watch") or {}).get("gradescope") or {}).get("course")
     if not course:

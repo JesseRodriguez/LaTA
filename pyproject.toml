@@ -1,6 +1,6 @@
 [project]
 name = "lata"
-version = "1.0.0"
+version = "2.0.0"
 description = "LaTA (Large Language Teaching Assistant) - Automated grading workflow for LaTeX-based STEM assignments using open-source LLMs"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

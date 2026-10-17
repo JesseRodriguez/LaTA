@@ -1,5 +1,9 @@
 # Getting Started with LaTA
 
+> **New in v2.0.0:** LaTA can watch a term's assignments and take each submission from
+> Gradescope to emailed feedback on its own -- see the [User Guide](USER_GUIDE.md). This page
+> covers installation, configuration, rubrics and grading one assignment at a time.
+
 This guide walks you through setting up and running LaTA from scratch, including detailed configuration reference, rubric writing, and troubleshooting.
 
 ---
@@ -348,7 +352,7 @@ uv run python grade.py
 
 # Grade a specific student (by name or Gradescope ID)
 uv run python grade.py --student "Jane Doe"
-uv run python grade.py --student "934527676"
+uv run python grade.py --student "123456789"
 
 # Re-grade specific students (deletes existing feedback first)
 uv run python grade.py --regrade "Jane Doe" "John Smith"
@@ -433,7 +437,7 @@ data/output/MyAssignment_Feedback/
 │   ├── Feedback_Jane_Doe.tex          # LaTeX source of feedback
 │   └── Feedback_Jane_Doe.log          # LaTeX compilation log
 └── debug/
-    └── Jane_Doe_934527676/
+    └── Jane_Doe_123456789/
         └── Problem_1_a/
             ├── prompt.txt             # Full prompt sent to LLM
             ├── response.txt           # Raw LLM response
@@ -457,7 +461,7 @@ Each student's PDF includes:
 If grading fails after all retries, details are saved to `failed_submissions.yaml`:
 
 ```yaml
-- student_id: "Jane Doe (934527676)"
+- student_id: "Jane Doe (123456789)"
   problem_label: "Problem 2 (b)"
   error_type: "ValidationError"
   error_msg: "Field required: student_hint"
