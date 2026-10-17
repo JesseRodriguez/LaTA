@@ -11,7 +11,7 @@ TITLES = [(1, "Homework #2"), (2, "Homework #2 (561)"), (3, "Homework #2 .tex fi
           (5, "Homework #2 .tex file (CORRECTIONS)"), (6, "Homework #2 (561) .tex File (Corrections)"),
           (7, "Homework #4 .tex file"), (8, "Homework #4")]
 A = [GSAssignment(id=i, title=t, due_local="2026-10-18T22:00", hard_due_local=None, published=True,
-                  due_utc=S.to_utc("2026-10-18T22:00", "America/Los_Angeles")) for i, t in TITLES]
+                  due_utc=S.to_utc("2026-10-18T22:00", "America/Los_Angeles"), total_points=12.0) for i, t in TITLES]
 titles = [t for _, t in TITLES]
 
 pairs = {p.tex.id: p for p in pair_assignments(A)}
@@ -55,7 +55,9 @@ watch:
     course: 1234567
 '''
 Path("config.yaml").write_text(cfg_text)
-answers = iter(["3,4,5"] + [""] * 4 + [""] * 4 + [""] * 3 + ["y"])   # rows 3-5: name, rubric, solution, due each; HW4 stops after solution
+answers = iter(["3,4,5"] + [""] * 5 + [""] * 4 + ["4"] + [""] * 3 + ["y"])
+# rows 3 and 4: name, rubric, solution, due, hand-graded points (row 3 accepts the default, row 4 types 4);
+# row 5 (HW4) stops after the solution
 builtins.input = lambda prompt="": next(answers)
 class NoSession:
     def __init__(self, *a): pass
@@ -73,8 +75,14 @@ check(rc == 0 and names == ["ME461_HW3", "ME461_HW2_CORRECTIONS", "ME561_HW2_COR
 check("# keep me" in text and "# my watch setup" in text and cfg["watch"]["gradescope"]["course"] == 1234567, "comments and the watch block kept")
 e = cfg["assignments"][1]
 check(e["gradescope"] == {"tex": 5, "pdf": 1} and e["due_date"] == "2026-10-19 05:00:00", "IDs and GMT due date written")
+check(e["grading"]["late_penalties"]["points_awarded_elsewhere"] == 2 and cfg["assignments"][2]["grading"]["late_penalties"]["points_awarded_elsewhere"] == 4,
+      "hand-graded points: default = PDF total 12 - rubric 10 = 2; a typed value is kept")
+
 import lata.watch as W
 built = [a.name for a in W.build_assignments(cfg)]
+late = W.build_assignments(cfg)[1].config["grading"]["late_penalties"]
+check(late["points_awarded_elsewhere"] == 2 and late["due_date"] == "2026-10-19 05:00:00" and "penalty_per_day" in late,
+      "the per-assignment value merges into late_penalties without dropping the rest")
 check(built[-2:] == ["ME461_HW2_CORRECTIONS", "ME561_HW2_CORRECTIONS"] and W.build_assignments(cfg)[-1].corrections,
       "the watcher accepts the new entries (corrections mode)")
 

@@ -262,6 +262,21 @@ class Ledger:
                 # Keep the unreadable file for inspection rather than overwrite it
                 self.path.rename(self.path.with_suffix(".corrupt.json"))
         self.data.setdefault("students", {})
+        self._repair_interrupted()
+
+    def _repair_interrupted(self):
+        """Undo a bug in earlier versions: stopping the watcher mid-batch recorded every
+        student in the batch as graded, held with "no report was generated", so they were
+        never graded. Such students (no report, never adopted from earlier output) are
+        made ungraded again; problems graded before the stop are reused."""
+        for st in self.students.values():
+            graded = st.get("graded")
+            if (graded and not graded.get("seeded") and not st.get("report")
+                    and any("no report was generated" in h for h in st.get("held") or [])
+                    and not any("attempts" in h for h in st.get("held") or [])):
+                del st["graded"]
+                st.pop("held", None)
+                st["repaired"] = "regrade: earlier run was stopped before this report"
 
     @property
     def students(self) -> Dict[str, dict]:

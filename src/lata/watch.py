@@ -80,6 +80,8 @@ DEFAULTS = {
     'unload_model_after_idle_minutes': 120,
     'gradescope': {},
 }
+MAX_ATTEMPTS = 2                     # tries at producing a student's report before holding it
+
 GRADESCOPE_DEFAULTS = {
     'course': None,
     'profile_dir': None,             # default ~/.lata/gradescope-profile
@@ -649,6 +651,17 @@ class Watcher:
             if act is None:
                 continue
             hold = outcome.hold_reasons()
+            if outcome.report is None:
+                st = ledger.get(key)
+                if result.interrupted:
+                    continue          # stopped before its report: graded again next time
+                # No report (e.g. the model server died): try once more before holding
+                st["attempts"] = st.get("attempts", 0) + 1
+                st["last_failure"] = "; ".join(hold)
+                if st["attempts"] < MAX_ATTEMPTS:
+                    events.info.append(f"{a.name}: {outcome.name}: no report ({st['last_failure']}); will try again")
+                    continue
+                hold = hold + [f"no report after {st['attempts']} attempts"]
             ledger.mark_graded(key, snapshot[key], act.created_at, act.pdf, now, outcome.report, hold)
             if hold:
                 events.attention.append(f"{a.name}: {outcome.name} graded but held: {'; '.join(hold)}")

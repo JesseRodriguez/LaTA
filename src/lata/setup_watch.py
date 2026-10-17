@@ -25,7 +25,9 @@ its PDF assignment by title ("Homework #2 (561) .tex file" with "Homework #2 (56
 corrections, "... .tex file (CORRECTIONS)", with the original homework's PDF assignment,
 where corrections PDFs go), takes the due date from Gradescope (converted to GMT, as the
 config wants), suggests the LaTA name, rubric and solution from what is in data/rubrics
-and data/solutions, and appends the entries you confirm to the config's `assignments:`.
+and data/solutions, and the points graded by hand (points_awarded_elsewhere: the PDF
+assignment's total minus the rubric's), and appends the entries you confirm to the
+config's `assignments:`.
 
 Titles without a course number ("Homework #2") are taken to belong to the course number
 in the Gradescope course name that no other title is tagged with ("ME 461/561" with
@@ -60,6 +62,7 @@ class GSAssignment:
     hard_due_local: Optional[str]
     published: bool
     due_utc: Optional[str] = None     # "2026-10-10 05:00:00", as the config wants
+    total_points: Optional[float] = None
 
     @property
     def is_tex(self) -> bool:
@@ -115,6 +118,10 @@ def fetch_assignments(gs, course: int) -> Tuple[List[GSAssignment], str, str]:
                          due_local=w.get("due_date"), hard_due_local=w.get("hard_due_date"),
                          published=bool(row.get("is_published")))
         a.due_utc = to_utc(a.due_local, tz)
+        try:
+            a.total_points = float(row.get("total_points"))
+        except (TypeError, ValueError):
+            a.total_points = None
         out.append(a)
     m = re.search(r"<title>(.*?)\|", gs.text(f"/courses/{course}"))
     name = (m.group(1).replace("Dashboard", "").strip() if m else "")
@@ -188,12 +195,26 @@ def suggest(pair: Pair, course_name: str, all_titles: List[str],
                       rubric_choices=rubrics, solution_choices=solutions)
 
 
-def entry_text(name: str, rubric: str, solution: str, due_utc: str, pair: Pair, local_due: str, tz: str) -> str:
-    return (f"  - name: {name}\n"
+def entry_text(name: str, rubric: str, solution: str, due_utc: str, pair: Pair, local_due: str, tz: str,
+               elsewhere: Optional[float] = None) -> str:
+    text = (f"  - name: {name}\n"
             f"    rubric_file: {rubric}\n"
             f"    solution_file: {solution}\n"
             f"    due_date: \"{due_utc}\"            # GMT ({local_due.replace('T', ' ')} {tz})\n"
             f"    gradescope: {{tex: {pair.tex.id}, pdf: {pair.pdf.id}}}   # {pair.tex.title} / {pair.pdf.title}\n")
+    if elsewhere is not None:
+        text += (f"    grading: {{late_penalties: {{points_awarded_elsewhere: {elsewhere:g}}}}}"
+                 f"   # points graded by hand\n")
+    return text
+
+
+def rubric_points(path: Path) -> Optional[float]:
+    try:
+        rubric = yaml.safe_load(path.read_text()) or {}
+        return float(sum(i.get('points', 0) for secs in rubric.values() for sec in secs
+                         for i in sec.get('items', []) if not i.get('is_extra_credit', False)))
+    except (OSError, yaml.YAMLError, AttributeError, TypeError):
+        return None
 
 
 def add_entries(config_path: Path, entries: List[str], course: int) -> List[str]:
@@ -311,6 +332,21 @@ def main(argv=None):
             print(f"    skipping {name}: it needs a rubric and a solution file (type their names to add it ahead of time)")
             continue
         due = ask(f"    due date, GMT (Gradescope: {(p.tex.due_local or '?').replace('T', ' ')} {tz})", p.tex.due_utc)
+        # Points graded by hand: the PDF assignment's total minus what LaTA's rubric covers.
+        # Late penalties are charged on rubric + these, so it matters even with no late students yet.
+        lata_points = rubric_points(rubrics_dir / rubric)
+        guess = (p.pdf.total_points - lata_points) if (p.pdf.total_points is not None and lata_points is not None) else None
+        hint = (f"PDF assignment {p.pdf.total_points:g} pts - rubric {lata_points:g}" if guess is not None
+                else "the PDF assignment's points not covered by the rubric")
+        answer = ask(f"    points graded by hand (points_awarded_elsewhere; {hint})",
+                     f"{guess:g}" if guess is not None and guess >= 0 else None)
+        try:
+            elsewhere = float(answer) if answer else None
+        except ValueError:
+            print(f"    {answer!r} is not a number; leaving points_awarded_elsewhere to the shared setting")
+            elsewhere = None
+        if guess is not None and guess < 0:
+            print(f"    ⚠️  the rubric ({lata_points:g}) is worth more than the PDF assignment ({p.pdf.total_points:g})")
         for label, path in (("rubric", rubrics_dir / rubric), ("solution", Path(solution))):
             if not path.exists():
                 print(f"    ⚠️  {label} {path} does not exist yet -- the watcher will not start until it does")
@@ -319,7 +355,7 @@ def main(argv=None):
                 and not Path(f"data/output/{first}_Feedback").exists():
             print(f"    ⚠️  its first pass {first} is neither in the config nor graded "
                   f"(data/output/{first}_Feedback) -- the watcher will not start until one is true")
-        entries.append(entry_text(name, rubric, solution, due, p, p.tex.due_local or "", tz))
+        entries.append(entry_text(name, rubric, solution, due, p, p.tex.due_local or "", tz, elsewhere))
 
     if not entries:
         print("Nothing added.")
