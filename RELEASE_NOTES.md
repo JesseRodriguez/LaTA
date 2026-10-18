@@ -1,5 +1,13 @@
 # Release Notes
 
+## v2.0.1
+
+- **Fixed:** students who submitted a PDF but no `.tex` now get your full-deduction rubric
+  item (e.g. "No .tex file") on Gradescope. Gradescope stores a negatively scored
+  question's deductions as positive weights, so the item was never found and LaTA entered
+  an equivalent point adjustment instead -- the score was already right (0), only the
+  rubric item was missing.
+
 ## v2.0.0 -- From deadline to feedback, unattended
 
 LaTA used to be something you ran after exporting an assignment by hand. v2.0.0 can run
