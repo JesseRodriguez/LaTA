@@ -59,8 +59,9 @@ class FakeGS:
         e = self.evals.get(qsid, {"graded": False, "points": 0.0, "rubric": set()})
         return {"submission": {"assignment_submission_id": qsid // 10, "score": str(self.score_of(qsid)), "graded": e["graded"]},
                 "evaluation": {"points": str(e["points"])},
+                # Gradescope stores a negative question's deductions as positive weights
                 "rubric_items": [{"id": 1, "description": "Correct", "weight": "0.0"},
-                                 {"id": 2, "description": "No .tex", "weight": str(-WEIGHT)}],
+                                 {"id": 2, "description": "No .tex", "weight": str(WEIGHT)}],
                 "question": {"weight": str(WEIGHT), "scoring_type": self.scoring, "floor": True, "ceiling": False},
                 "assignment": {"published": self.published}}
 

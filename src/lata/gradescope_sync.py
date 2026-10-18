@@ -220,7 +220,9 @@ class GradeEntry:
         items = page.get('rubric_items') or []
         rubric = {int(i['id']): False for i in items}
         if zero:
-            wipe = next((i for i in items if abs(float(i['weight']) + weight) < 1e-6), None)
+            # A rubric item taking off the whole question. Gradescope stores deductions on a
+            # negatively scored question as positive weights ("No sketch: 6.0"), so match the size
+            wipe = next((i for i in items if abs(abs(float(i['weight'])) - weight) < 1e-6), None)
             if wipe and negative:
                 rubric[int(wipe['id'])] = True
                 points = 0.0
