@@ -52,7 +52,8 @@ def main():
     watch.add_argument("--once", action="store_true",
                        help="Check every assignment once, do whatever is due, and exit")
     watch.add_argument("--send", dest="auto_send", action="store_true", default=None,
-                       help="Email feedback as soon as a clean report is ready (overrides watch.auto_send_feedback)")
+                       help="Release feedback automatically -- with Gradescope, once published and fully graded "
+                            "there, after a Canvas sync (overrides watch.auto_send_feedback)")
     watch.add_argument("--no-send", dest="auto_send", action="store_false",
                        help="Grade, but hold feedback until you type `send` (the default)")
     watch.add_argument("--dry-run", action="store_true",

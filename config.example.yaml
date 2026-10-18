@@ -257,9 +257,11 @@ email:
 #
 # watch:
 #   auto_send_feedback: false     # false: feedback waits until you type `send` in the watcher
-#                                 # (after hand grading + publishing); true: email clean
-#                                 # reports as soon as they are ready. --send / --no-send
-#                                 # override this for one run.
+#                                 # (after hand grading + publishing). true: the watcher does
+#                                 # what `send` would, per student, whenever the checks pass --
+#                                 # once published, each student is synced to Canvas and emailed
+#                                 # as soon as they are fully graded on Gradescope.
+#                                 # --send / --no-send override this for one run.
 #   send_notices: true            # "PDF missing" / ".tex missing" emails to students
 #   notify_email: null            # where to send "needs your attention" emails
 #   poll_minutes: 10              # how often to check for new submissions

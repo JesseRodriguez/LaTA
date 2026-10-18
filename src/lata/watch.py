@@ -43,8 +43,10 @@ on Gradescope too (lata.gradescope_sync).
 
 Feedback waits for you by default: grade any hand-graded questions, publish on Gradescope,
 then type `send` into the running watcher. It checks the grades are published and complete,
-posts them to Canvas, and emails the reports. With watch.auto_send_feedback, clean reports
-are emailed as soon as they are ready instead.
+posts them to Canvas, and emails the reports. With watch.auto_send_feedback the watcher does
+that itself, per student, whenever the checks pass: once you have published, each student
+goes out as soon as they are fully graded on Gradescope (immediately with nothing graded by
+hand), with a Canvas sync first.
 """
 
 import copy
@@ -452,15 +454,40 @@ class Watcher:
                 if name is not None:
                     print(f"   {a.name}: nothing waiting to be sent")
                 continue
-            if self.uses_gradescope and not self.release_checks(a, ready, force, events):
+            allowed = self.release_checks(a, ready, force, events) if self.uses_gradescope else {k for k, _ in ready}
+            if not allowed:
                 continue
-            self.send_feedback(a, ledger, utcnow(), events, only={k for k, _ in ready})
+            self.send_feedback(a, ledger, utcnow(), events, only=allowed)
             ledger.save()
         if events.info or events.attention:
             self.finish_pass(events)
 
-    def release_checks(self, a: Assignment, ready: List[tuple], force: bool, events: Events) -> bool:
-        """Before sending: grades published and complete on Gradescope, then post to Canvas."""
+    def auto_release(self, a: Assignment, ledger: Ledger, now, events: Events):
+        """auto_send_feedback: do what `send` would, whenever its checks pass.
+
+        Students go out once the assignment is published on Gradescope and they are fully
+        graded there -- straight away with nothing graded by hand, otherwise as soon as
+        their hand-graded questions are done -- with a Canvas sync first. Students graded
+        before the watcher started are never sent automatically."""
+        ready = [(k, st) for k, st in self.awaiting_release(a, ledger)
+                 if not (st.get("graded") or {}).get("seeded")]
+        if not ready:
+            return
+        if not self.uses_gradescope:
+            self.send_feedback(a, ledger, now, events, only={k for k, _ in ready})
+            return
+        allowed = self.release_checks(a, ready, False, events, auto=True)
+        if allowed:
+            self.send_feedback(a, ledger, now, events, only=allowed)
+
+    def release_checks(self, a: Assignment, ready: List[tuple], force: bool, events: Events,
+                       auto: bool = False) -> set:
+        """Before sending: grades published and complete on Gradescope, then post to Canvas.
+
+        Returns the students who may be sent. By hand (`send`), all of them or none: anyone
+        not fully graded stops the release (unless --force). Automatically, those who are
+        fully graded go now and the rest wait."""
+        say = (lambda m: self.attention_once(events, m)) if auto else print
         try:
             self.gradescope()
             course, pdf = int(self.gs_settings['course']), a.gradescope['pdf']
@@ -470,15 +497,24 @@ class Watcher:
                                   if (st.get("gradescope") or {}).get("qsid")), None)
             published = self.grade_entry.published(a, with_qsid)
             if published is False:
-                print(f"   ❌ {a.name}: grades are not published on Gradescope yet. Publish them, then `send {a.name}` again.")
-                return False
+                say(f"{a.name}: feedback is ready and goes out automatically once you publish the grades on Gradescope."
+                    if auto else f"   ❌ {a.name}: grades are not published on Gradescope yet. "
+                                 f"Publish them, then `send {a.name}` again.")
+                return set()
             rows = {row_key: r for r in self.gs.scores(course, pdf) for row_key in [student_key(r.get('SID'), r.get('Email'))]}
-            incomplete = [st.get("name") for key, st in ready if (rows.get(key) or {}).get('Status') != 'Graded']
-            if incomplete and not force:
+            complete = {key for key, st in ready if (rows.get(key) or {}).get('Status') == 'Graded'}
+            incomplete = [st.get("name") for key, st in ready if key not in complete]
+            if auto:
+                allowed = complete           # the rest wait for their hand-graded questions
+                if not allowed:
+                    return set()
+            elif incomplete and not force:
                 print(f"   ❌ {a.name}: {len(incomplete)} student(s) are not fully graded on Gradescope "
                       f"(hand-graded questions?): {', '.join(incomplete)}")
                 print(f"      Finish them, or `send {a.name} --force` to send anyway.")
-                return False
+                return set()
+            else:
+                allowed = {k for k, _ in ready}
             if self.gs_settings['canvas_sync']:
                 if self.dry_run:
                     print(f"   [DRY-RUN] would post {a.name}'s grades to Canvas")
@@ -486,11 +522,12 @@ class Watcher:
                     print(f"   ⏳ Posting {a.name} grades to Canvas...")
                     self.gs.post_grades_to_canvas(course, pdf)
                     events.info.append(f"{a.name}: grades posted to Canvas")
-            return True
+            return allowed
         except Exception as e:
-            print(f"   ❌ {a.name}: {e}")
-            events.attention.append(f"{a.name}: release stopped: {e}")
-            return False
+            if not auto:
+                print(f"   ❌ {a.name}: {e}")
+            self.attention_once(events, f"{a.name}: release stopped: {e}")
+            return set()
 
     # -- one pass ---------------------------------------------------------------------
 
@@ -627,7 +664,7 @@ class Watcher:
             if ready:
                 events.info.append(f"{a.name}: [DRY-RUN] feedback for {len(ready)} student(s) would then wait for `send`")
         elif self.settings['auto_send_feedback']:
-            self.send_feedback(a, ledger, now, events)
+            self.auto_release(a, ledger, now, events)
         else:
             self.announce_release(a, ledger, events)
         ledger.save()
@@ -739,7 +776,7 @@ class Watcher:
                 r = w.reason.split(";")[0]
                 reasons[r] = reasons.get(r, 0) + 1
             detail = ", ".join(f"{n} {r}" for r, n in sorted(reasons.items()))
-            ready = len(self.awaiting_release(a, ledger)) if not self.settings['auto_send_feedback'] else 0
+            ready = len(self.awaiting_release(a, ledger))
             on_gs = sum(1 for s in sts if (s.get("gradescope") or {}).get("status") in ("entered", "match"))
             print(f"   {a.name}: {graded} graded"
                   + (f", {on_gs} on Gradescope" if self.uses_gradescope else "")
@@ -808,7 +845,7 @@ def run_watch(config: dict, config_path: str, options: GradingOptions, once: boo
               f" | Canvas sync on release: {'yes' if gs['canvas_sync'] else 'no'}")
     else:
         print(f"   Exports from: {s['source']} ({s['inbox_dir']}/<assignment>/)")
-    print(f"   Feedback: {'emailed automatically when clean' if s['auto_send_feedback'] else 'waits for you to type `send`'}"
+    print(f"   Feedback: {('released automatically once published and fully graded on Gradescope' if watcher.uses_gradescope else 'emailed automatically when clean') if s['auto_send_feedback'] else 'waits for you to type `send`'}"
           f" | missing-file notices: {'on' if s['send_notices'] else 'off'}"
           f" | attention emails: {s['notify_email'] or 'off (desktop notification)'}")
     try:

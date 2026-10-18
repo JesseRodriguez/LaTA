@@ -47,6 +47,10 @@ The [User Guide](docs/USER_GUIDE.md) covers the new workflow end to end.
   Gradescope's history.
 - **Release on `send`**: feedback waits until you have graded hand-graded questions and
   published. `send` checks both, posts the grades to Canvas, and emails the reports.
+- **Or release automatically** (`auto_send_feedback: true`): after you publish once, each
+  student is synced to Canvas and emailed as soon as they are fully graded on Gradescope --
+  immediately with nothing graded by hand, otherwise once their hand-graded questions are
+  done. Stragglers need nothing from you.
 - Signs in through a real browser once (`python -m lata.gradescope login`, SSO works);
   the session is saved privately and LaTA never sees your password.
 - **`python -m lata.setup_watch`** adds assignments to the config straight from

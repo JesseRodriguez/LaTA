@@ -180,12 +180,17 @@ and entered the same way, and wait for the next `send`.
 Other commands: `status`, `check` (check for submissions now), `help`. The watcher keeps
 checking for submissions while it waits for you to type.
 
-## Sending automatically
+## Releasing automatically
 
-With `auto_send_feedback: true` (or `--send`), a clean report is emailed as soon as it is
-generated -- for assignments with nothing graded by hand. Grades are still entered on
-Gradescope; publishing and the Canvas sync are left to you. A report is held back when
-something about it needs a person:
+With `auto_send_feedback: true` (or `--send`), the watcher performs `send` itself whenever
+its checks pass, one student at a time. With `source: gradescope`, that means: once the
+assignment is published (until then it tells you, once, that publishing releases the
+feedback), each student goes out as soon as they are fully graded on Gradescope -- straight
+away with nothing graded by hand, otherwise when their hand-graded questions are done --
+with a Canvas sync first. With the inbox source, which cannot see Gradescope, clean reports
+are emailed as soon as they are written. Students graded before the watcher started are
+never released automatically. A report is held back, in either mode, when something about
+it needs a person:
 
 - a problem failed to grade (schema errors after retries)
 - the problems could not be located in the submission (segmentation warning)

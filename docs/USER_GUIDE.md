@@ -271,9 +271,22 @@ graded on Gradescope -- if not, it lists who is not and stops (`send ME461_HW3 -
 sends anyway). Then it **posts the grades to Canvas** and **emails each student their
 report**. Students graded later wait for your next `send`.
 
-If you prefer feedback to go out on its own (for assignments with nothing graded by
-hand), set `watch.auto_send_feedback: true` or run with `--send`: each clean report is
-emailed as soon as it is written. Publishing and Canvas are then left to you.
+### Releasing automatically
+
+Set `watch.auto_send_feedback: true` (or run with `--send`) and the watcher does what `send`
+would, by itself, per student, whenever the checks pass:
+
+- nothing goes out until you have **published once** -- LaTA tells you so, and the first
+  batch is released on the next check after you publish;
+- after that, each student goes out as soon as they are **fully graded on Gradescope**:
+  straight away if nothing is graded by hand, otherwise once a TA has graded their
+  hand-graded questions;
+- every release **posts to Canvas first**, then emails.
+
+So for stragglers you do nothing (or only the hand grading): once an assignment is
+published, Gradescope shows students new grades as they are entered, and LaTA syncs and
+emails them. Students graded before the watcher started are never released automatically
+(use `send`), and held reports and grade conflicts wait for you in either mode.
 
 ---
 
@@ -361,7 +374,7 @@ through the submissions after feedback goes out.
 | `uv run grade.py --config FILE` | Watch (when the config has `assignments:`) |
 | `... --dry-run` | One check that changes nothing and reports what would happen |
 | `... --once` | One check, then exit |
-| `... --send` / `--no-send` | Email clean reports automatically / wait for `send` (default) |
+| `... --send` / `--no-send` | Release automatically / wait for `send` (default) |
 | `... --concurrency N`, `--watch-slot N`, `--no-dashboard` | Slots, which slot's reasoning to show, plain log lines |
 | `uv run python tests/run_all.py` | Run the test suite (made-up students) |
 
@@ -376,7 +389,7 @@ for submissions now), `help`.
 | `gradescope.course` | -- | the course's Gradescope id |
 | `gradescope.enter_grades` | `true` | enter LaTA's grades on Gradescope |
 | `gradescope.canvas_sync` | `true` | post grades to Canvas on `send` |
-| `auto_send_feedback` | `false` | email clean reports as soon as they are ready |
+| `auto_send_feedback` | `false` | release automatically whenever `send` would succeed (published, fully graded), per student |
 | `send_notices` | `true` | "incomplete submission" emails |
 | `notify_email` | -- | where "needs your attention" emails go |
 | `poll_minutes` | `10` | how often to check |
