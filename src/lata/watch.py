@@ -611,11 +611,8 @@ class Watcher:
         ledger.observe(snapshot, now)
         ledger.seed_from_outputs(snapshot, a.output_dir, safe_name)
 
-        extensions = {}
-        ext_path = a.export_dir / "extensions.yaml"
-        if ext_path.exists():
-            with open(ext_path) as f:
-                extensions = {k: float(v) for k, v in (yaml.safe_load(f) or {}).items()}
+        from lata.ingest import load_extensions
+        extensions = load_extensions(a.export_dir)     # extensions.yaml + Gradescope's
         policy = Policy(due=a.due, settle=timedelta(minutes=self.settings['settle_minutes']),
                         notice_after=timedelta(hours=self.settings['notice_after_hours']),
                         extensions=extensions, corrections=a.corrections,

@@ -245,6 +245,34 @@ class Gradescope:
         return self._react_props(self.text(f"/courses/{course}/questions/{question}/submissions/{qsid}/grade"),
                                  "SubmissionGrader")
 
+    def course_timezone(self, course: int) -> str:
+        """The course's time zone (Gradescope shows and stores due dates in it)."""
+        cache = self.__dict__.setdefault("_tz", {})
+        if course not in cache:
+            props = self._react_props(self.text(f"/courses/{course}/assignments"), "AssignmentsTable")
+            cache[course] = (props.get("timezone") or {}).get("identifier") or "UTC"
+        return cache[course]
+
+    def extensions(self, course: int, assignment: int) -> List[Dict[str, Optional[str]]]:
+        """Per-student extensions on an assignment (its Extensions page).
+
+        [{'user_id', 'name', 'email', 'due', 'type'}] -- `due` is the student's extended
+        due date in the course's time zone ("2026-10-23T22:52"), `type` Gradescope's kind
+        of value ('absolute' for a date)."""
+        page = self.text(f"/courses/{course}/assignments/{assignment}/extensions")
+        try:
+            props = self._react_props(page, "AddExtension")
+        except GradescopeError:
+            return []
+        people = {str(p["id"]): p for p in props.get("students") or []}
+        out = []
+        for uid, override in (props.get("overrides") or {}).items():
+            due = (override.get("settings") or {}).get("due_date") or {}
+            person = people.get(str(uid), {})
+            out.append({"user_id": str(uid), "name": person.get("name"), "email": person.get("email"),
+                        "due": due.get("value"), "type": due.get("type")})
+        return out
+
     def export_submissions(self, course: int, assignment: int, dest: Path,
                            timeout_minutes: int = 20) -> Path:
         """Gradescope's "Export Submissions": build the zip on the server, wait, download."""

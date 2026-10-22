@@ -27,6 +27,7 @@ class FakeGS:
         self.saves = []
         self.exports = 0
         self.scoring = "negative"
+        self.ext = {}                     # assignment -> [extension dicts], as Gradescope lists them
 
     def row(self, sid, sub):
         first, last = NAMES[sid].split()
@@ -73,6 +74,12 @@ class FakeGS:
         self.exports += 1
         fx.tex_zip(dest, {asid: (NAMES[sid], sid, utc(t)) for sid, (asid, t) in self.tex.items()})
         return dest
+
+    def course_timezone(self, course):
+        return "America/Los_Angeles"
+
+    def extensions(self, course, a):
+        return self.ext.get(a, [])
 
     def post_grades_to_canvas(self, course, a):
         self.canvas_posts += 1

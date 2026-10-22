@@ -102,6 +102,7 @@ class GradescopeSource:
         self.course = course
         self.root = Path(inbox_dir)
         self.pdf_rows: Dict[str, List[Dict[str, str]]] = {}
+        self._reported = set()
 
     def describe(self, a) -> str:
         ids = a.gradescope or {}
@@ -137,6 +138,63 @@ class GradescopeSource:
                     old.unlink(missing_ok=True)
             state['tex_signature'] = signature
             _save(state_path, state)
+
+        # After the export, so names match the export's spelling
+        try:
+            self.sync_extensions(a, pdf_rows, events)
+        except GradescopeError as e:
+            self._once(events, f"{a.name}: could not read extensions from Gradescope: {e}")
+
+    def _once(self, events, message: str):
+        if message not in self._reported:
+            self._reported.add(message)
+            events.attention.append(message)
+
+
+    def sync_extensions(self, a, pdf_rows: List[Dict[str, str]], events) -> None:
+        """Write the extensions entered on Gradescope (on either the .tex or the PDF
+        assignment) to <export_dir>/extensions.gradescope.yaml, in hours past the config's
+        due date, by the student's name as it appears in the export. A student extended on
+        both assignments gets the later date."""
+        from lata.ingest import EXTENSIONS_FILES
+        from lata.setup_watch import to_utc
+        tz = self.gs.course_timezone(self.course)
+        # Names as LaTA knows them (the .tex export), so extensions match by name downstream
+        names = {}
+        meta_path = a.export_dir / "submission_metadata.yml"
+        if meta_path.exists():
+            meta = yaml.safe_load(meta_path.read_text()) or {}
+            for sub in meta.values():
+                for person in (sub or {}).get(':submitters') or (sub or {}).get('submitters') or []:
+                    email = person.get(':email', person.get('email'))
+                    if email:
+                        names.setdefault(str(email).lower(), person.get(':name', person.get('name')))
+        for r in pdf_rows:
+            if r.get('Email'):
+                names.setdefault(r['Email'].lower(), f"{r.get('First Name', '')} {r.get('Last Name', '')}".strip())
+
+        hours, odd = {}, []
+        for assignment in dict.fromkeys((a.gradescope['tex'], a.gradescope['pdf'])):
+            for ext in self.gs.extensions(self.course, assignment):
+                name = names.get(str(ext.get('email') or '').lower()) or ext.get('name')
+                if ext.get('type') != 'absolute' or not ext.get('due'):
+                    odd.append(name or ext.get('user_id'))
+                    continue
+                extra = (parse_ts(to_utc(ext['due'], tz)) - a.due).total_seconds() / 3600
+                if extra > 0 and name:
+                    hours[name] = max(hours.get(name, 0.0), round(extra, 2))
+        for name in odd:
+            self._once(events, f"{a.name}: {name}: extension on Gradescope is not a fixed date; "
+                               f"put it in {EXTENSIONS_FILES[0]} instead")
+        path = a.export_dir / EXTENSIONS_FILES[1]
+        text = yaml.safe_dump(hours, sort_keys=True) if hours else ""
+        previous = path.read_text() if path.exists() else ""
+        if text != previous:
+            if hours:
+                path.write_text(text)
+            elif path.exists():
+                path.unlink()
+            events.info.append(f"{a.name}: extensions from Gradescope: {len(hours)} student(s)")
 
 
 @dataclass
@@ -356,8 +414,8 @@ def final_score_for(a, name: str, sid: str, charged_at=None,
                         else charged_at)
         if when is None:
             return None, None, "late penalty not recorded and submission time unknown", False
-        extensions_path = Path(a.config['paths']['export_dir']) / "extensions.yaml"
-        extensions = (yaml.safe_load(extensions_path.read_text()) or {}) if extensions_path.exists() else {}
+        from lata.ingest import load_extensions
+        extensions = load_extensions(a.config['paths']['export_dir'])
         days, pct = late_days_and_fraction(gradescope_ts(when), late['due_date'],
                                            float(late.get('penalty_per_day', 0.2)),
                                            float(extensions.get(name, 0) or 0))

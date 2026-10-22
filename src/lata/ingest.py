@@ -130,6 +130,34 @@ def process_latex_content(tex_content: str) -> str:
 # Main Loader Class
 # -----------------------------------------------------------------------------
 
+EXTENSIONS_FILES = ("extensions.yaml",              # written by hand
+                    "extensions.gradescope.yaml")   # written by the watcher from Gradescope
+
+
+def load_extensions(export_dir) -> dict:
+    """Per-student deadline extensions in hours, {"Jane Doe": 24, ...}.
+
+    From extensions.yaml (by hand) and extensions.gradescope.yaml (the watcher reads the
+    extensions entered on Gradescope into it); a student in both gets the larger.
+    """
+    out = {}
+    for name in EXTENSIONS_FILES:
+        path = Path(export_dir) / name
+        if not path.exists():
+            continue
+        try:
+            with open(path, 'r') as f:
+                data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                print(f"⚠️  Warning: {name} is not a mapping of name -> hours, ignoring")
+                continue
+            for student, hours in data.items():
+                out[student] = max(out.get(student, 0.0), float(hours))
+        except Exception as e:
+            print(f"⚠️  Warning: Could not load {name}: {e}")
+    return out
+
+
 class GradescopeIngestor:
     def __init__(self, export_dir: str, anonymize: bool = False):
         self.export_dir = Path(export_dir)
@@ -146,37 +174,11 @@ class GradescopeIngestor:
             return data
 
     def _load_extensions(self, export_dir: Path) -> dict:
-        """
-        Load per-student deadline extensions from extensions.yaml.
-
-        Returns dict mapping student_name → extension_hours:
-            {"Jane Doe": 24, "John Smith": 48}
-
-        If file doesn't exist, returns empty dict.
-        """
-        extensions_path = export_dir / "extensions.yaml"
-
-        if not extensions_path.exists():
-            return {}
-
-        try:
-            with open(extensions_path, 'r') as f:
-                extensions = yaml.safe_load(f) or {}
-
-            # Validate format
-            if not isinstance(extensions, dict):
-                print(f"⚠️  Warning: extensions.yaml is not a dict, ignoring")
-                return {}
-
-            # Convert all values to float (support int or float hours)
-            extensions = {k: float(v) for k, v in extensions.items()}
-
+        """Per-student deadline extensions, in hours: see load_extensions()."""
+        extensions = load_extensions(export_dir)
+        if extensions:
             print(f"📅 Loaded deadline extensions for {len(extensions)} students")
-            return extensions
-
-        except Exception as e:
-            print(f"⚠️  Warning: Could not load extensions.yaml: {e}")
-            return {}
+        return extensions
 
     def load(self) -> IngestionResult:
         if not self.metadata_path.exists():

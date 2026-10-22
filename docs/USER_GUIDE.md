@@ -156,6 +156,7 @@ LaTA works with your Gradescope assignments as they are, given a few conventions
 - **Corrections** go in a separate `.tex` assignment; students resubmit their PDF to the
   original PDF assignment, so extend its late due date to the corrections deadline.
 - **Link the PDF assignment to Canvas** if you want LaTA to post grades there on `send`.
+- **Enter extensions on Gradescope**, on either assignment of the pair; LaTA picks them up.
 
 ---
 
@@ -212,11 +213,16 @@ watch:
   notify_email: you@university.edu
 ```
 
-Per-student deadline extensions go in `data/input/<NAME>/extensions.yaml`
-(`Jane Doe: 24` for 24 hours). An extension moves that student's late-penalty clock and
-missing-file notices; it does not delay grading -- a student who has submitted is graded
-with the class at the assignment's due date. If they resubmit within their extension after
-being graded, you are told (it is not regraded automatically).
+**Extensions: enter them on Gradescope** (the assignment's Extensions page, on the `.tex`
+or the PDF assignment -- students see them there too). LaTA reads them on every check;
+if a student has one on both, the later date counts. An extension moves that student's
+late-penalty clock and missing-file notices; it does not delay grading -- a student who
+has submitted is graded with the class at the assignment's due date. If they resubmit
+within their extension after being graded, you are told (it is not regraded
+automatically). Without Gradescope (the inbox source), or for an extension Gradescope
+stores as something other than a fixed date, list it in
+`data/input/<NAME>/extensions.yaml` instead (`Jane Doe: 24` for 24 hours); both are used,
+and the larger counts.
 
 **Check before you rely on it:**
 
@@ -413,6 +419,7 @@ override (e.g. `grading: {late_penalties: {points_awarded_elsewhere: 6}}`).
 | `data/output/<NAME>_Feedback/grading_metadata.yaml` | scores, late penalties, extra credit per report |
 | `data/output/<NAME>_Feedback/email_delivery.yaml` | who has been emailed what |
 | `data/output/<NAME>_Feedback/debug/` | prompts, responses and reasoning per student and problem |
+| `data/input/<NAME>/extensions.gradescope.yaml` | extensions read from Gradescope (rewritten every check) |
 | `data/output/watch_log.txt` | everything the watcher did |
 | `~/.lata/gradescope-profile/session.json` | your Gradescope session |
 

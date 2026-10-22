@@ -2,6 +2,10 @@
 
 ## v2.0.2
 
+- **New:** extensions are read from Gradescope. Enter them on the assignment's Extensions
+  page (the `.tex` or the PDF assignment -- students see them there); the watcher picks them
+  up on every check, so `extensions.yaml` is no longer needed with the Gradescope source.
+  It still works, and both are combined.
 - **Changed:** students with an extension are graded at the assignment's due date along with
   everyone else, instead of waiting until their extended deadline. The extension still sets
   their late penalty and when a missing-file notice is due. A resubmission inside their
