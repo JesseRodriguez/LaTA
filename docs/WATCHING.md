@@ -103,7 +103,7 @@ the first pass's folder (`inbox/ME461_HW1/`). Both assignments use it.
 | PDF in, no `.tex` | Emails *".tex missing"* on the same schedule |
 | Submitted to the `.tex` assignment without a `.tex` file | Same `.tex` notice if there is a PDF; otherwise flags it to you |
 | Already graded, then submits a new `.tex` | Flags it to you. Never regraded automatically. |
-| Before the deadline (plus any extension in `extensions.yaml`) | Waits |
+| Before the assignment's due date | Waits. Extensions in `extensions.yaml` do not delay grading; they count for late penalties and notices |
 
 Each notice is sent once. Notices and feedback are recorded in each assignment's
 `email_delivery.yaml`, so `post_grading.py send-feedback` will not repeat them.

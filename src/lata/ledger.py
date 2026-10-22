@@ -32,8 +32,9 @@ flagged. decide() is a pure function of ledger + snapshot + clock, so every time
 be tested without Gradescope, a model or a mail server.
 
 Rules, per student, for an assignment (not yet graded unless stated):
-  .tex and PDF        grade once past the deadline (plus any extension) and quiet for
-                      `settle` -- students often resubmit several times in a few minutes
+  .tex and PDF        grade once past the assignment's due date and quiet for `settle` --
+                      students often resubmit several times in a few minutes. Extensions do
+                      not delay grading; they count for late penalties and for notices
   .tex, no PDF        notice "PDF missing, late penalty accruing" once both the deadline
                       and an hour after the .tex have passed; grade when the PDF arrives
   PDF, no .tex        notice ".tex missing" on the same schedule
@@ -377,6 +378,10 @@ class Policy:
     first_pass: Optional[Callable[[str], Tuple[str, Optional[datetime]]]] = None
 
     def deadline_for(self, s: StudentSnapshot) -> datetime:
+        """The student's own deadline, extension included: when their late penalty starts
+        and when an incomplete submission is worth a notice. Grading waits only for the
+        assignment's due date (`due`), so an extended student who has submitted is graded
+        with everyone else."""
         return self.due + timedelta(hours=self.extensions.get(s.name, 0))
 
 
@@ -422,7 +427,7 @@ def decide(ledger: Ledger, snapshot: Dict[str, StudentSnapshot], policy: Policy,
             actions.append(Action("flag", s.key, s.name, detail=message, flag_id=flag_id))
 
     def grade_when_ready(s, created_at, pdf, last_activity):
-        deadline = policy.deadline_for(s)
+        deadline = policy.due                     # not the student's extended deadline
         ready_at = max(deadline, last_activity + policy.settle)
         if now >= ready_at:
             actions.append(Action("grade", s.key, s.name, created_at=created_at, pdf=pdf))
@@ -440,9 +445,11 @@ def decide(ledger: Ledger, snapshot: Dict[str, StudentSnapshot], policy: Policy,
         if graded:
             graded_tex = parse_ts(graded.get("tex_created_at") or graded.get("effective"))
             if tex_ok and graded_tex and s.tex.created_at > graded_tex:
+                within = (" This is within their extension, so it may be deliberate."
+                          if s.tex.created_at <= deadline and deadline > policy.due else "")
                 flag(s, f"resubmission:{s.tex.id}:{iso(s.tex.created_at)}",
                      f"submitted a new .tex at {iso(s.tex.created_at)} UTC after being graded "
-                     f"(graded submission from {iso(graded_tex)} UTC). Not regraded.")
+                     f"(graded submission from {iso(graded_tex)} UTC). Not regraded.{within}")
             if policy.corrections and not graded.get("seeded") and not graded.get("pdf_created_at") \
                     and s.pdf is not None and policy.first_pass is not None:
                 status, frozen = policy.first_pass(key)

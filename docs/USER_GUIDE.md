@@ -213,7 +213,10 @@ watch:
 ```
 
 Per-student deadline extensions go in `data/input/<NAME>/extensions.yaml`
-(`Jane Doe: 24` for 24 hours).
+(`Jane Doe: 24` for 24 hours). An extension moves that student's late-penalty clock and
+missing-file notices; it does not delay grading -- a student who has submitted is graded
+with the class at the assignment's due date. If they resubmit within their extension after
+being graded, you are told (it is not regraded automatically).
 
 **Check before you rely on it:**
 
@@ -239,7 +242,7 @@ What happens, per student:
 
 | When | What LaTA does |
 |---|---|
-| Before the deadline (plus extension) | Nothing but watch |
+| Before the assignment's due date | Nothing but watch (extensions do not delay grading) |
 | Deadline passed, `.tex` and PDF in, no resubmission for 15 minutes | Grades them, writes the report, enters the grade on Gradescope |
 | Deadline passed, only the `.tex` | An hour after the `.tex`: emails "PDF missing -- late penalty accruing". Graded when the PDF comes |
 | Deadline passed, only the PDF | An hour after the PDF: emails ".tex missing", and enters a zero on Gradescope. Graded (replacing the zero) when the `.tex` comes |

@@ -1,5 +1,12 @@
 # Release Notes
 
+## v2.0.2
+
+- **Changed:** students with an extension are graded at the assignment's due date along with
+  everyone else, instead of waiting until their extended deadline. The extension still sets
+  their late penalty and when a missing-file notice is due. A resubmission inside their
+  extension, after grading, is flagged as such rather than regraded.
+
 ## v2.0.1
 
 - **Fixed:** students who submitted a PDF but no `.tex` now get your full-deduction rubric

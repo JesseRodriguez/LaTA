@@ -38,7 +38,12 @@ a, w = run(l, snap(stu("4", "09-30 10:00")), "09-30 18:00"); check(a == [], ".te
 a, w = run(l, snap(stu("5", None, "10-01 10:00")), "10-01 11:00"); check(a == [("notice", "5", "missing_tex", None)], "PDF, no .tex: missing .tex notice")
 a, w = run(l, snap(stu("6", "10-01 07:00", "10-01 07:00", has_tex=False)), "10-01 09:00"); check(a == [("notice", "6", "missing_tex", None)], ".tex submission without a .tex file + PDF: .tex notice")
 a, w = run(l, snap(stu("7", "10-01 07:00", None, has_tex=False)), "10-01 09:00"); check(a[0][0] == "flag", "no .tex file and no PDF: flagged")
-a, w = run(l, snap(stu("8", "09-30 10:00", "09-30 10:00")), "10-01 09:00", extensions={"Student 8": 24}); check(a == [] and "deadline" in w["8"], "24h extension respected")
+a, w = run(l, snap(stu("8", "09-30 10:00", "09-30 10:00")), "10-01 09:00", extensions={"Student 8": 24})
+check(a and a[0][:2] == ("grade", "8"), "student with a 24h extension who has submitted: graded at the assignment's due date")
+a, w = run(l, snap(stu("8", "10-01 10:00")), "10-01 12:00", extensions={"Student 8": 24})
+check(a == [] and "notice due" in w["8"], "...but their missing-PDF notice waits for their own (extended) deadline")
+a, w = run(l, snap(stu("8", "10-01 10:00")), "10-02 08:01", extensions={"Student 8": 24})
+check(a == [("notice", "8", "missing_pdf", None)], "notice once their extension is over")
 a, w = run(l, snap(stu("9", "09-30 10:00", "09-30 10:00", group=True)), "10-01 09:00"); check(a == [] and w == {}, "group member: graded with the group")
 
 print("after grading")
@@ -48,6 +53,8 @@ a, w = run(l, snap(stu("1", "09-30 20:00", "10-03 12:00")), "10-03 13:00"); chec
 check(l.first_pass("1") == ("graded", T("09-30 20:05")), "first-pass time frozen at the graded PDF")
 s = snap(stu("1", "10-02 10:00", "09-30 20:05"))
 a, w = run(l, s, "10-02 11:00"); check(len(a) == 1 and a[0][0] == "flag" and "Not regraded" in a[0][2], "graded, newer .tex: flagged, not regraded")
+a, w = run(l, s, "10-02 11:00", extensions={"Student 1": 48})
+check("within their extension" in a[0][2], "resubmission inside the student's extension: the flag says so")
 l.get("1").setdefault("flags", {})["resubmission:t1:2026-10-02 10:00:00"] = {}
 a, w = run(l, s, "10-02 12:00"); check(a == [], "resubmission flagged once")
 
