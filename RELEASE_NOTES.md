@@ -10,6 +10,9 @@
   everyone else, instead of waiting until their extended deadline. The extension still sets
   their late penalty and when a missing-file notice is due. A resubmission inside their
   extension, after grading, is flagged as such rather than regraded.
+- **Fixed:** scores on feedback reports are rounded to at most two decimals, without
+  trailing zeros -- a 0.1 deduction showed as `0.0999999996`, and late penalties could show
+  similar floating-point noise.
 
 ## v2.0.1
 

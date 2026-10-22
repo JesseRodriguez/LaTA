@@ -56,12 +56,12 @@
         \vspace{0.3em}
 
         \begin{tabular}{rl}
-        \textbf{Days Late:} & \VAR{late_penalty.days_late} day(s) \\
-        \textbf{Penalty Rate:} & \VAR{late_penalty.penalty_percentage * 100}\% (\VAR{late_penalty.penalty_percentage * 100 / late_penalty.days_late}\% per day) \\
-        \textbf{Points Before Penalty:} & \VAR{total_score} \\
-        \textbf{Points Deducted:} & -\VAR{late_penalty.points_deducted} \\
+        \textbf{Days Late:} & \VAR{(late_penalty.days_late) | num} day(s) \\
+        \textbf{Penalty Rate:} & \VAR{(late_penalty.penalty_percentage * 100) | num}\% (\VAR{(late_penalty.penalty_percentage * 100 / late_penalty.days_late) | num}\% per day) \\
+        \textbf{Points Before Penalty:} & \VAR{(total_score) | num} \\
+        \textbf{Points Deducted:} & -\VAR{(late_penalty.points_deducted) | num} \\
         \hline
-        \textbf{Final Score:} & \textbf{\VAR{late_penalty.final_score}} \\
+        \textbf{Final Score:} & \textbf{\VAR{(late_penalty.final_score) | num}} \\
         \end{tabular}
 
         \vspace{0.3em}
@@ -102,11 +102,11 @@
 \rowcolor{ta_gray} \textbf{Problem / Section} & \textbf{Score} & \textbf{Max} & \textbf{Extra} & \textbf{Deducted} \\
 \hline
 \BLOCK{for group in summary_table}
-\VAR{group.name | latex_escape} & \textbf{\VAR{group.total_displayed_score}} & \VAR{group.max} & \BLOCK{if group.extra_credit_earned > 0}\textcolor{extra_credit_green}{+\VAR{group.extra_credit_earned}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{-\VAR{group.deducted}} \\
+\VAR{group.name | latex_escape} & \textbf{\VAR{(group.total_displayed_score) | num}} & \VAR{(group.max) | num} & \BLOCK{if group.extra_credit_earned > 0}\textcolor{extra_credit_green}{+\VAR{(group.extra_credit_earned) | num}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{-\VAR{(group.deducted) | num}} \\
 \hline
 \BLOCK{endfor}
 \hline
-\rowcolor{ta_gray} \textbf{TOTAL} & \textbf{\VAR{total_score}} & \VAR{max_total} & \BLOCK{if total_extra_credit > 0}\textcolor{extra_credit_green}{\textbf{+\VAR{total_extra_credit}}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{\textbf{-\VAR{total_deducted}}} \\
+\rowcolor{ta_gray} \textbf{TOTAL} & \textbf{\VAR{(total_score) | num}} & \VAR{(max_total) | num} & \BLOCK{if total_extra_credit > 0}\textcolor{extra_credit_green}{\textbf{+\VAR{(total_extra_credit) | num}}}\BLOCK{else}---\BLOCK{endif} & \textcolor{late_red}{\textbf{-\VAR{(total_deducted) | num}}} \\
 \hline
 \end{tabular}
 \end{center}
@@ -158,13 +158,13 @@
 \BLOCK{for section_title, data in grouped_data.items()}
     % Show this section if regular (non-EC) points were lost
     \BLOCK{if data.score < data.max}
-        \subsection*{\VAR{section_title | latex_escape} Incorrect Rubric Items \hfill Score: [\VAR{data.score}/\VAR{data.max}]}
+        \subsection*{\VAR{section_title | latex_escape} Incorrect Rubric Items \hfill Score: [\VAR{(data.score) | num}/\VAR{(data.max) | num}]}
 
         \begin{itemize}[leftmargin=*]
         \BLOCK{for item in data.grade_items}
             % Only show non-extra-credit items that lost points
             \BLOCK{if item.score < item.max_score and not item.is_extra_credit}
-                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{item.max_score - item.score} pts})
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{(item.max_score - item.score) | num} pts})
                 
                 \vspace{0.3em}
                 % The Hint Box
@@ -183,13 +183,13 @@
 
     % Show extra credit section if there are any extra credit items (and not in corrections mode for missed items)
     \BLOCK{if data.extra_credit_items|length > 0 and not is_corrections_mode}
-        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{data.extra_credit_earned} pts}}
+        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{(data.extra_credit_earned) | num} pts}}
 
         \begin{itemize}[leftmargin=*]
         \BLOCK{for item in data.extra_credit_items}
             \BLOCK{if item.score > 0}
                 % Earned extra credit
-                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{item.score} pts})
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{(item.score) | num} pts})
 
                 \vspace{0.3em}
                 \fcolorbox{hint_border}{hint_bg}{
@@ -202,7 +202,7 @@
                 \vspace{0.5em}
             \BLOCK{else}
                 % Missed extra credit
-                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{item.max_score} pts})
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{late_red}{Missed \VAR{(item.max_score) | num} pts})
 
                 \vspace{0.3em}
                 \fcolorbox{hint_border}{hint_bg}{
@@ -218,12 +218,12 @@
         \end{itemize}
     \BLOCK{elif data.extra_credit_earned > 0 and is_corrections_mode}
         % In corrections mode, only show earned extra credit (preserved from original)
-        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{data.extra_credit_earned} pts}}
+        \subsection*{\VAR{section_title | latex_escape} Extra Credit \hfill \textcolor{extra_credit_green}{+\VAR{(data.extra_credit_earned) | num} pts}}
 
         \begin{itemize}[leftmargin=*]
         \BLOCK{for item in data.extra_credit_items}
             \BLOCK{if item.score > 0}
-                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{item.score} pts})
+                \item \textbf{\VAR{item.criterion_name | latex_escape}} (\textcolor{extra_credit_green}{+\VAR{(item.score) | num} pts})
 
                 \vspace{0.3em}
                 \fcolorbox{hint_border}{hint_bg}{

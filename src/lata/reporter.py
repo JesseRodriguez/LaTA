@@ -25,6 +25,19 @@ from openai import OpenAI
 
 # Import validation module
 
+def format_number(value) -> str:
+    """A score for the report: at most two decimals, no trailing zeros, no "-0".
+
+    5 -> "5", 2.5 -> "2.5", 0.1 -> "0.1" (not "0.0999999996"), 12.80 -> "12.8".
+    Anything that is not a number is returned unchanged."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return value
+    text = f"{x:.2f}".rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
 def late_days_and_fraction(submission_created_at: str, due_date_str: str, penalty_per_day: float,
                            extension_hours: float = 0) -> tuple:
     """(days late, penalty fraction) for a submission time, as the report computes them.
@@ -118,6 +131,7 @@ class LatexReporter:
             autoescape=False,
         )
         self.env.filters['latex_escape'] = self.escape_latex
+        self.env.filters['num'] = format_number
 
     def _load_grading_metadata(self):
         """Loads existing grading metadata or returns empty dict"""
