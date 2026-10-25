@@ -1,5 +1,13 @@
 # Release Notes
 
+## v2.0.3
+
+- **New:** `held` and `approve` watcher commands. `held` lists reports held for review
+  (possible prompt injection, segmentation warning, a problem that failed to grade) with
+  the reason. After reviewing one, `approve <student>` releases it: its grade is entered on
+  Gradescope right away and the student goes out with everyone else, by `send` or
+  automatically. Previously a held report had to be entered and sent by hand.
+
 ## v2.0.2
 
 - **New:** extensions are read from Gradescope. Enter them on the assignment's Extensions

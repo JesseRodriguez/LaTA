@@ -156,7 +156,8 @@ for you.
 LaTA only writes to question submissions nobody has graded, or that it graded itself,
 and reads each grade back after saving. A grade already entered by hand that differs
 from LaTA's is left alone and reported to you; that student's feedback waits until you
-resolve it (and send it with `post_grading.py send-feedback`). Corrections are entered
+resolve it on Gradescope -- once Gradescope shows LaTA's score, the next check sees that and
+the student is released as usual. Corrections are entered
 on the student's resubmitted PDF -- the new, ungraded submission -- so Gradescope keeps
 the first-pass grade in its history; incomplete corrections (no new PDF) are not entered.
 
@@ -197,8 +198,12 @@ it needs a person:
 - possible prompt injection was detected
 - the report did not compile
 
-Held reports (in either mode) stay in the output folder. Look at them, fix what needs
-fixing, and send them with `post_grading.py send-feedback`.
+Held reports (in either mode) stay in the output folder, and their grades are not entered
+on Gradescope. Type `held` in the watcher to list them. When you have looked at one and it
+is fine (a false alarm on prompt injection, say), `approve <student name>`: its grade is
+entered on Gradescope on the check that follows immediately, and the student is released
+with everyone else -- by `send`, or automatically. If it is not fine, regrade it
+(`grade.py --regrade`).
 
 Students graded before the watcher started (by plain `grade.py`) are recognised from
 their reports and never graded twice. Their grades are entered on Gradescope like

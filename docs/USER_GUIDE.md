@@ -343,7 +343,7 @@ desktop notification) and written to `data/output/watch_log.txt`:
 
 | Message | What to do |
 |---|---|
-| *graded but held: grading failed for Problem 2* (or segmentation warning, possible prompt injection, no report) | Look at the report and the debug files; regrade or fix, then send it with `post_grading.py send-feedback` |
+| *graded but held: possible prompt injection* (or a segmentation warning, or a problem that failed to grade) | Type `held` to list held reports, and read the report (and its `debug/` files). If it is fine, `approve <name>`: the grade goes on Gradescope at once and the student is released with everyone else. If it is not, fix it and regrade (`grade.py --regrade`). A held student with *no report* cannot be approved -- regrade them |
 | *already graded on Gradescope as 48; LaTA has 52. Left alone.* | Someone entered a different grade by hand. Resolve it on Gradescope; that student's feedback waits |
 | *submitted a new .tex ... after being graded. Not regraded.* | Decide whether to regrade by hand |
 | *resubmitted their PDF ... after corrections feedback* | Decide whether to apply the corrections grade |
@@ -387,8 +387,9 @@ through the submissions after feedback goes out.
 | `... --concurrency N`, `--watch-slot N`, `--no-dashboard` | Slots, which slot's reasoning to show, plain log lines |
 | `uv run python tests/run_all.py` | Run the test suite (made-up students) |
 
-Typed into the running watcher: `send [ASSIGNMENT] [--force]`, `status`, `check` (check
-for submissions now), `help`.
+Typed into the running watcher: `send [ASSIGNMENT] [--force]`, `held` (list held reports),
+`approve <STUDENT> [ASSIGNMENT]` (release a held report after review), `status`, `check`
+(check for submissions now), `help`.
 
 ### Settings (`watch:`)
 

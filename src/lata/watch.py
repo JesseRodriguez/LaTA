@@ -441,6 +441,52 @@ class Watcher:
         events.attention.append(f"{a.name}: feedback for {len(keys)} student(s) is ready. "
                                 f"To release it, {steps}type `send {a.name}` in the watcher.")
 
+    def list_held(self):
+        held = [(a, st) for a in self.assignments for st in self.ledger(a).students.values() if st.get("held")]
+        if not held:
+            print("   No reports are held.")
+        for a, st in held:
+            print(f"   {a.name}: {st.get('name')}: {'; '.join(st['held'])}")
+            if st.get("report"):
+                print(f"      report: {st['report']}")
+        if held:
+            print("   After reviewing, `approve <name>` releases one (its grade goes on Gradescope, then it is sent as usual).")
+
+    def approve(self, query: str) -> bool:
+        """Release a held report after the instructor has reviewed it. Returns True if one was."""
+        q = query.lower().split()
+        assignment = next((a for a in self.assignments if a.name.lower() in q), None)
+        if assignment:                               # `approve Jane ME461_HW3` narrows to one assignment
+            q = [w for w in q if w != assignment.name.lower()]
+        matches = [(a, k, st) for a, k, st in self.ledger_matches(q) if assignment is None or a is assignment]
+        if not matches:
+            print(f"   No held report matches {query!r}. `held` lists them.")
+            return False
+        if len(matches) > 1:
+            print(f"   {len(matches)} held reports match {query!r}; be more specific (add more of the name, or the assignment):")
+            for a, _, st in matches:
+                print(f"      {a.name}: {st.get('name')}")
+            return False
+        a, key, st = matches[0]
+        reasons = st["held"]
+        if not st.get("report") or not Path(st["report"]).exists():
+            print(f"   {a.name}: {st.get('name')} has no report to send ({'; '.join(reasons)}). "
+                  f"Regrade them (grade.py --regrade) instead.")
+            return False
+        if any("grading failed" in r for r in reasons):
+            print(f"   ⚠️  {st.get('name')}'s report is missing problems that failed to grade; it will be sent as it is.")
+        st.pop("held")
+        st["approved"] = {"at": iso(utcnow()), "reasons": reasons}
+        self.ledger(a).save()
+        print(f"   ✅ {a.name}: {st.get('name')} approved. Their grade goes on Gradescope on this check, "
+              f"then they are released with everyone else.")
+        return True
+
+    def ledger_matches(self, words):
+        """Held students whose name contains every word."""
+        return [(a, key, st) for a in self.assignments for key, st in self.ledger(a).students.items()
+                if st.get("held") and all(w in (st.get("name") or "").lower() for w in words)]
+
     def release(self, name: Optional[str], force: bool = False):
         targets = [a for a in self.assignments if name is None or a.name.lower() == name.lower()]
         if not targets:
@@ -785,7 +831,8 @@ class Watcher:
 class Console:
     """Reads commands typed into the running watcher, without stopping its checks."""
 
-    HELP = ("   Commands: send [assignment] [--force] | status | check (check now) | help\n"
+    HELP = ("   Commands: send [assignment] [--force] | held | approve <student> [assignment] |\n"
+            "             status | check (check now) | help\n"
             "   (Ctrl-C stops watching)")
 
     def __init__(self):
@@ -817,6 +864,13 @@ def handle_command(watcher: Watcher, line: str) -> bool:
         watcher.release(names[0] if names else None, force=force)
     elif cmd == "status":
         watcher.print_status()
+    elif cmd == "held":
+        watcher.list_held()
+    elif cmd == "approve":
+        if not args:
+            print("   approve <student name> [assignment] -- `held` lists held reports")
+            return False
+        return watcher.approve(" ".join(args))     # check now, so the grade is entered
     elif cmd in ("check", "now"):
         return True
     else:
