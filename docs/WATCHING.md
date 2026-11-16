@@ -202,8 +202,12 @@ Held reports (in either mode) stay in the output folder, and their grades are no
 on Gradescope. Type `held` in the watcher to list them. When you have looked at one and it
 is fine (a false alarm on prompt injection, say), `approve <student name>`: its grade is
 entered on Gradescope on the check that follows immediately, and the student is released
-with everyone else -- by `send`, or automatically. If it is not fine, regrade it
-(`grade.py --regrade`).
+with everyone else -- by `send`, or automatically. If it is not fine -- typically a problem
+that failed to grade -- `regrade <student name>`: the student is graded again on a check
+that starts at once, reusing the problems that did grade (`--fresh` regrades them all),
+with their original submission time. The new report replaces the old one; if it is clean,
+its grade goes on Gradescope and it is released as usual, otherwise it is held again. No
+config changes are needed for either.
 
 Students graded before the watcher started (by plain `grade.py`) are recognised from
 their reports and never graded twice. Their grades are entered on Gradescope like

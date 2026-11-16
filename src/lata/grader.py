@@ -642,6 +642,11 @@ class LatexGrader:
             except Exception as e:
                 self._log(f"   ⚠️  Ignoring unreadable saved result for {problem_label}: {e}")
 
+        if retry_attempt == 0:
+            # Grading this problem anew: notes from an earlier grading of it no longer apply
+            for stale in ("SECURITY_FLAG.txt", "score_validation.txt"):
+                (debug_dir / stale).unlink(missing_ok=True)
+
         with open(debug_dir / "prompt.txt", "w") as f:
             f.write(system_prompt + "\n\n" + user_prompt)
 

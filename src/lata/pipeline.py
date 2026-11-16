@@ -49,6 +49,9 @@ class GradingOptions:
     dashboard: bool = True           # live dashboard when concurrency > 1 and stdout is a tty
     regrade: Optional[List[str]] = None
     student: Optional[str] = None
+    # With `regrade`: reuse problems that graded successfully before and only send the
+    # rest (e.g. ones that failed) to the model. False regrades every problem afresh.
+    keep_finished: bool = False
 
 
 @dataclass
@@ -359,7 +362,7 @@ def _grade_and_report(options, output_dir, plans, total_problems,
                 solution_text=job.solution_text,
                 rubric_items=job.rubric_items,
                 student_id=student.anonymized_id,
-                use_cache=not plan.is_regrade,
+                use_cache=not plan.is_regrade or options.keep_finished,
             )
             ok = bool(items)
             return items

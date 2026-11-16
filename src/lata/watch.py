@@ -450,7 +450,8 @@ class Watcher:
             if st.get("report"):
                 print(f"      report: {st['report']}")
         if held:
-            print("   After reviewing, `approve <name>` releases one (its grade goes on Gradescope, then it is sent as usual).")
+            print("   After reviewing: `approve <name>` releases one as it is (its grade goes on Gradescope, then it is\n"
+                  "   sent as usual), or `regrade <name>` grades it again (`--fresh` to regrade every problem).")
 
     def approve(self, query: str) -> bool:
         """Release a held report after the instructor has reviewed it. Returns True if one was."""
@@ -471,7 +472,7 @@ class Watcher:
         reasons = st["held"]
         if not st.get("report") or not Path(st["report"]).exists():
             print(f"   {a.name}: {st.get('name')} has no report to send ({'; '.join(reasons)}). "
-                  f"Regrade them (grade.py --regrade) instead.")
+                  f"`regrade {st.get('name')}` instead.")
             return False
         if any("grading failed" in r for r in reasons):
             print(f"   ⚠️  {st.get('name')}'s report is missing problems that failed to grade; it will be sent as it is.")
@@ -480,6 +481,32 @@ class Watcher:
         self.ledger(a).save()
         print(f"   ✅ {a.name}: {st.get('name')} approved. Their grade goes on Gradescope on this check, "
               f"then they are released with everyone else.")
+        return True
+
+    def regrade(self, query: str, fresh: bool = False) -> bool:
+        """Grade a held student again (e.g. a problem failed to grade). Returns True if one
+        was queued; it is graded on the check that follows immediately."""
+        q = query.lower().split()
+        assignment = next((a for a in self.assignments if a.name.lower() in q), None)
+        if assignment:
+            q = [w for w in q if w != assignment.name.lower()]
+        matches = [(a, k, st) for a, k, st in self.ledger_matches(q) if assignment is None or a is assignment]
+        if not matches:
+            print(f"   No held report matches {query!r}. `held` lists them.")
+            return False
+        if len(matches) > 1:
+            print(f"   {len(matches)} held reports match {query!r}; be more specific (add more of the name, or the assignment):")
+            for a, _, st in matches:
+                print(f"      {a.name}: {st.get('name')}")
+            return False
+        a, key, st = matches[0]
+        st["regrade"] = {"at": iso(utcnow()), "fresh": fresh, "was_held": st.pop("held")}
+        st.pop("graded", None)
+        st.pop("attempts", None)
+        self.ledger(a).save()
+        what = "every problem afresh" if fresh else "the problems that did not grade (finished ones are reused)"
+        print(f"   🔁 {a.name}: {st.get('name')} will be regraded now -- {what}. "
+              f"The new report replaces the old one; if it is clean, it goes through as usual.")
         return True
 
     def ledger_matches(self, words):
@@ -731,7 +758,15 @@ class Watcher:
             act = grade.get(key_of(s))
             return gradescope_ts(act.created_at) if act else None
 
-        result = grade_assignment(cfg, self.config_path, self.options,
+        # Students queued with `regrade` are regraded (their report is overwritten, not versioned)
+        regrade = [ledger.get(k) for k in grade if ledger.get(k).get("regrade")]
+        options = self.options
+        if regrade:
+            options = copy.copy(self.options)
+            options.regrade = [st.get("name") for st in regrade]
+            options.keep_finished = not any(st["regrade"].get("fresh") for st in regrade)
+        # (A regrade call grades only the regraded students; anyone else ready goes next pass.)
+        result = grade_assignment(cfg, self.config_path, options,
                                   select=lambda s: key_of(s) in grade, created_at=charged_time)
         self.last_graded = time.monotonic()
         if result.error:
@@ -754,6 +789,7 @@ class Watcher:
                     continue
                 hold = hold + [f"no report after {st['attempts']} attempts"]
             ledger.mark_graded(key, snapshot[key], act.created_at, act.pdf, now, outcome.report, hold)
+            ledger.get(key).pop("regrade", None)     # done; kept until now so a stop mid-regrade retries
             if hold:
                 events.attention.append(f"{a.name}: {outcome.name} graded but held: {'; '.join(hold)}")
             else:
@@ -832,7 +868,7 @@ class Console:
     """Reads commands typed into the running watcher, without stopping its checks."""
 
     HELP = ("   Commands: send [assignment] [--force] | held | approve <student> [assignment] |\n"
-            "             status | check (check now) | help\n"
+            "             regrade <student> [assignment] [--fresh] | status | check (check now) | help\n"
             "   (Ctrl-C stops watching)")
 
     def __init__(self):
@@ -866,6 +902,13 @@ def handle_command(watcher: Watcher, line: str) -> bool:
         watcher.print_status()
     elif cmd == "held":
         watcher.list_held()
+    elif cmd == "regrade":
+        fresh = "--fresh" in args
+        words = [x for x in args if x != "--fresh"]
+        if not words:
+            print("   regrade <student name> [assignment] [--fresh] -- `held` lists held reports")
+            return False
+        return watcher.regrade(" ".join(words), fresh=fresh)
     elif cmd == "approve":
         if not args:
             print("   approve <student name> [assignment] -- `held` lists held reports")

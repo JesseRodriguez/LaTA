@@ -324,7 +324,7 @@ class Ledger:
         for key, s in snapshot.items():
             st = self.get(key)
             name = safe_name(s.name)
-            if "graded" not in st:
+            if "graded" not in st and not st.get("regrade"):
                 reports = [output_dir / f"Feedback_{name}.pdf",
                            *sorted(output_dir.glob(f"Feedback_{name}_v*.pdf"))]
                 existing = [r for r in reports if r.exists()]

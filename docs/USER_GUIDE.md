@@ -343,7 +343,7 @@ desktop notification) and written to `data/output/watch_log.txt`:
 
 | Message | What to do |
 |---|---|
-| *graded but held: possible prompt injection* (or a segmentation warning, or a problem that failed to grade) | Type `held` to list held reports, and read the report (and its `debug/` files). If it is fine, `approve <name>`: the grade goes on Gradescope at once and the student is released with everyone else. If it is not, fix it and regrade (`grade.py --regrade`). A held student with *no report* cannot be approved -- regrade them |
+| *graded but held: grading failed for Problem 2* (or possible prompt injection, a segmentation warning, no report) | Type `held` to list held reports and read the report (and its `debug/` files). If it is fine as it is: `approve <name>`. If grading failed or went wrong: `regrade <name>` -- it is graded again at once (only the problems that failed, unless you add `--fresh`), the new report replaces the old, and a clean result goes on Gradescope and through as usual. Either way, nothing to edit in the config. A segmentation warning will not go away by regrading: approve it, or fix the submission's problem markers first |
 | *already graded on Gradescope as 48; LaTA has 52. Left alone.* | Someone entered a different grade by hand. Resolve it on Gradescope; that student's feedback waits |
 | *submitted a new .tex ... after being graded. Not regraded.* | Decide whether to regrade by hand |
 | *resubmitted their PDF ... after corrections feedback* | Decide whether to apply the corrections grade |
@@ -388,8 +388,9 @@ through the submissions after feedback goes out.
 | `uv run python tests/run_all.py` | Run the test suite (made-up students) |
 
 Typed into the running watcher: `send [ASSIGNMENT] [--force]`, `held` (list held reports),
-`approve <STUDENT> [ASSIGNMENT]` (release a held report after review), `status`, `check`
-(check for submissions now), `help`.
+`approve <STUDENT> [ASSIGNMENT]` (release a held report after review), `regrade <STUDENT>
+[ASSIGNMENT] [--fresh]` (grade a held student again), `status`, `check` (check for
+submissions now), `help`.
 
 ### Settings (`watch:`)
 

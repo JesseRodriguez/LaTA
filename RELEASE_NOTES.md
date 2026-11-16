@@ -1,5 +1,15 @@
 # Release Notes
 
+## v2.0.4
+
+- **New:** `regrade <student> [assignment] [--fresh]` in the watcher grades a held student
+  again -- typically after a problem failed to grade -- without touching the config. Only
+  the problems that did not grade are sent to the model (all of them with `--fresh`); the
+  new report replaces the old one and, if clean, goes onto Gradescope and through release
+  as usual. `held` now offers it alongside `approve`.
+- **Fixed:** a problem graded afresh no longer keeps an old "possible prompt injection" flag
+  or score-fix note from an earlier grading of it.
+
 ## v2.0.3
 
 - **New:** `held` and `approve` watcher commands. `held` lists reports held for review
