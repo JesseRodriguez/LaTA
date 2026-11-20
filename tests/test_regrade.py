@@ -44,7 +44,6 @@ def out(f):
 check(state()["3"].get("held") and 2030 not in {q for q, _, _ in gs.saves}, "Kim held (Problem 1 failed), not on Gradescope")
 _, listing = out(lambda: W.handle_command(w, "held"))
 check("regrade <name>" in listing, "`held` offers regrade alongside approve")
-check(W.handle_command(w, "regrade Jane") is False, "only held students can be regraded this way")
 
 # A stop in the middle of the regrade: nothing half-done gets released
 trouble["fail"] = set(); trouble["stop"] = True

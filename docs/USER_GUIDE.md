@@ -308,7 +308,8 @@ emails them. Students graded before the watcher started are never released autom
   the student's last upload -- so a student who uploads the PDF a few minutes after the
   `.tex` is never warned.
 - **A new `.tex` after grading** is not regraded: it is almost always a mistake, so LaTA
-  flags it to you and leaves the grade alone. Handle any exception by hand.
+  flags it to you and leaves the grade alone. To grade the new submission after all, type
+  `regrade <name>` in the watcher.
 - **Students graded before the watcher started** (by plain `grade.py`) are recognised
   from their reports and never graded twice. Their grades are entered on Gradescope like
   anyone's and they are included when you `send`, but never emailed automatically.
@@ -345,7 +346,7 @@ desktop notification) and written to `data/output/watch_log.txt`:
 |---|---|
 | *graded but held: grading failed for Problem 2* (or possible prompt injection, a segmentation warning, no report) | Type `held` to list held reports and read the report (and its `debug/` files). If it is fine as it is: `approve <name>`. If grading failed or went wrong: `regrade <name>` -- it is graded again at once (only the problems that failed, unless you add `--fresh`), the new report replaces the old, and a clean result goes on Gradescope and through as usual. Either way, nothing to edit in the config. A segmentation warning will not go away by regrading: approve it, or fix the submission's problem markers first |
 | *already graded on Gradescope as 48; LaTA has 52. Left alone.* | Someone entered a different grade by hand. Resolve it on Gradescope; that student's feedback waits |
-| *submitted a new .tex ... after being graded. Not regraded.* | Decide whether to regrade by hand |
+| *submitted a new .tex ... after being graded. Not regraded.* | If it should count, `regrade <name>`: the newest submission is graded (with its late penalty) and the new report replaces the old |
 | *resubmitted their PDF ... after corrections feedback* | Decide whether to apply the corrections grade |
 | *feedback for N student(s) is ready* | Release it (section 6) |
 | *Gradescope: ... session expired* | `uv run python -m lata.gradescope login`. Nothing is fetched or entered meanwhile |
@@ -356,6 +357,15 @@ through the submissions after feedback goes out.
 ---
 
 ## 10. Stopping, restarting and changing things
+
+- **Regrade a student** (a regrade request, a fixed rubric, a resubmission you accept):
+  type `regrade John Smith` in the watcher. It finds the student in your watched
+  assignments -- if more than one, it lists them and you type the number, or name the
+  assignment (`regrade John Smith ME461_HW3`). Every problem is regraded (a held student
+  whose grading failed reuses the problems that worked; `--fresh` forces all), from their
+  latest submission, and the new report replaces the old. Its score replaces LaTA's entry
+  on Gradescope (a grade changed by hand there is reported, not overwritten), and if they
+  had already received feedback, the new report is sent again when released.
 
 - **Stop** with Ctrl-C, at any time -- even mid-grading. Students whose reports were
   written are kept; the rest are graded on the next start, reusing every problem already
@@ -389,8 +399,9 @@ through the submissions after feedback goes out.
 
 Typed into the running watcher: `send [ASSIGNMENT] [--force]`, `held` (list held reports),
 `approve <STUDENT> [ASSIGNMENT]` (release a held report after review), `regrade <STUDENT>
-[ASSIGNMENT] [--fresh]` (grade a held student again), `status`, `check` (check for
-submissions now), `help`.
+[ASSIGNMENT] [--fresh]` (grade any student again -- looked up across the watched
+assignments; if several match you pick one), `status`, `check` (check for submissions
+now), `help`.
 
 ### Settings (`watch:`)
 

@@ -334,7 +334,8 @@ class Ledger:
                                     "tex_created_at": iso(when), "pdf_created_at": None}
                     st["report"] = str(existing[-1])
             # Deliveries made outside the watcher (post_grading.py send-feedback) count too
-            if name in (delivery.get('delivered') or {}) and not st.get("feedback_sent_at"):
+            if name in (delivery.get('delivered') or {}) and not st.get("feedback_sent_at") \
+                    and not st.get("resend"):           # a regrade's new report is still to go
                 st["feedback_sent_at"] = delivery['delivered'][name].get('sent_at') or "before watcher"
             for kind in ("missing_tex", "missing_pdf", "missing_tex_corrections"):
                 if name in (delivery.get(f'{kind}_notified') or {}):

@@ -211,6 +211,7 @@ class Watcher:
         self.grade_entry = None
         self.reported = set()              # attention messages already sent, to not repeat
         self.announced: Dict[str, frozenset] = {}
+        self.pending = None                # a follow-up question awaiting the next typed line
         if self.settings['source'] == 'inbox':
             self.source = InboxSource(self.settings['inbox_dir'])
         elif self.settings['source'] == 'gradescope':
@@ -484,29 +485,77 @@ class Watcher:
         return True
 
     def regrade(self, query: str, fresh: bool = False) -> bool:
-        """Grade a held student again (e.g. a problem failed to grade). Returns True if one
-        was queued; it is graded on the check that follows immediately."""
+        """Grade a student again -- held or not -- on the check that follows immediately.
+
+        The student is looked up by name across every watched assignment ("regrade John
+        Smith"); naming the assignment too narrows it. If several assignments match, they
+        are listed and the next line typed picks one. Returns True if one was queued."""
         q = query.lower().split()
         assignment = next((a for a in self.assignments if a.name.lower() in q), None)
         if assignment:
             q = [w for w in q if w != assignment.name.lower()]
-        matches = [(a, k, st) for a, k, st in self.ledger_matches(q) if assignment is None or a is assignment]
-        if not matches:
-            print(f"   No held report matches {query!r}. `held` lists them.")
+        if not q:
+            print("   regrade <student name> [assignment] [--fresh]")
             return False
-        if len(matches) > 1:
-            print(f"   {len(matches)} held reports match {query!r}; be more specific (add more of the name, or the assignment):")
-            for a, _, st in matches:
-                print(f"      {a.name}: {st.get('name')}")
+        found = [(a, k, st) for a in self.assignments if assignment is None or a is assignment
+                 for k, st in self.ledger(a).students.items()
+                 if all(w in (st.get("name") or "").lower() for w in q)]
+        if not found:
+            print(f"   No student matching {query!r} in "
+                  + (assignment.name if assignment else "any watched assignment") + ".")
             return False
-        a, key, st = matches[0]
-        st["regrade"] = {"at": iso(utcnow()), "fresh": fresh, "was_held": st.pop("held")}
-        st.pop("graded", None)
-        st.pop("attempts", None)
+        if len(found) == 1:
+            return self.queue_regrade(*found[0], fresh=fresh)
+        print(f"   {query!r} matches more than one -- which?")
+        for i, (a, _, st) in enumerate(found, 1):
+            print(f"      {i}) {a.name}: {st.get('name')} ({self.describe_state(st)})")
+        print("   Type its number (Enter cancels).")
+
+        def choose(line: str) -> bool:
+            line = line.strip()
+            if line.isdigit() and 1 <= int(line) <= len(found):
+                return self.queue_regrade(*found[int(line) - 1], fresh=fresh)
+            print("   Regrade cancelled.")
+            return False
+        self.pending = choose
+        return False
+
+    @staticmethod
+    def describe_state(st: dict) -> str:
+        if st.get("held"):
+            return "held: " + "; ".join(st["held"])
+        if st.get("regrade"):
+            return "regrade queued"
+        if st.get("feedback_sent_at"):
+            return f"graded, feedback sent {st['feedback_sent_at']}"
+        if st.get("graded"):
+            return "graded, feedback not sent yet"
+        return "not graded yet"
+
+    def queue_regrade(self, a: Assignment, key: str, st: dict, fresh: bool = False) -> bool:
+        if not st.get("graded") and not st.get("held"):
+            print(f"   {a.name}: {st.get('name')} is not graded yet; they will be graded as soon as their "
+                  f"submission is complete and due.")
+            return False
+        held = st.get("held") or []
+        # Reusing finished problems only helps when some failed; otherwise it would rebuild
+        # the same report, so anything else is regraded from scratch
+        failed = any("grading failed" in h or "no report" in h for h in held)
+        fresh = fresh or not failed
+        st["regrade"] = {"at": iso(utcnow()), "fresh": fresh, "was_held": held or None}
+        for k in ("held", "graded", "attempts"):
+            st.pop(k, None)
+        note = ""
+        if st.get("feedback_sent_at"):
+            # Their feedback goes out again once the new report is released
+            st["previous_feedback_at"] = st.pop("feedback_sent_at")
+            st["resend"] = True
+            note = (f" They already received feedback ({st['previous_feedback_at']}); the new report is sent "
+                    f"again when released.")
         self.ledger(a).save()
         what = "every problem afresh" if fresh else "the problems that did not grade (finished ones are reused)"
-        print(f"   🔁 {a.name}: {st.get('name')} will be regraded now -- {what}. "
-              f"The new report replaces the old one; if it is clean, it goes through as usual.")
+        print(f"   🔁 {a.name}: {st.get('name')} will be regraded now -- {what}, from their latest "
+              f"submission. The new report replaces the old one and goes through as usual.{note}")
         return True
 
     def ledger_matches(self, words):
@@ -815,6 +864,7 @@ class Watcher:
                                       student_sid=st.get("sid", ""))
             if emailer.send_single_feedback(student, Path(st["report"])):
                 st["feedback_sent_at"] = iso(now)
+                st.pop("resend", None)
                 incomplete = emailer.missing_corrections_pdf(student)
                 if incomplete:
                     st["corrections_not_applied"] = True
@@ -890,6 +940,9 @@ class Console:
 
 def handle_command(watcher: Watcher, line: str) -> bool:
     """Run one typed command. Returns True to check for submissions right away."""
+    if watcher.pending is not None:                 # the answer to a question just asked
+        answer, watcher.pending = watcher.pending, None
+        return answer(line)
     parts = line.split()
     if not parts:
         return False

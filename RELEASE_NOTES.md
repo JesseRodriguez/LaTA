@@ -1,5 +1,15 @@
 # Release Notes
 
+## v2.0.5
+
+- **New:** `regrade <student>` works for any graded student, not only held ones, and finds
+  them by name across the watched assignments -- `regrade John Smith`. If they are in more
+  than one, the watcher lists them with their state and the next line picks one (or name the
+  assignment). Students who are not held are regraded from scratch, from their latest
+  submission; LaTA's earlier Gradescope entry is replaced, and feedback already sent is
+  sent again with the new report when released. Useful for regrade requests and for
+  resubmissions flagged after grading.
+
 ## v2.0.4
 
 - **New:** `regrade <student> [assignment] [--fresh]` in the watcher grades a held student

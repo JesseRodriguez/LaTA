@@ -209,6 +209,12 @@ with their original submission time. The new report replaces the old one; if it 
 its grade goes on Gradescope and it is released as usual, otherwise it is held again. No
 config changes are needed for either.
 
+`regrade` works for any graded student, not only held ones -- for a regrade request, or a
+resubmission you decide to accept: `regrade John Smith` finds them across the watched
+assignments (listing them for you to pick if there are several; naming the assignment
+skips that), regrades every problem from their latest submission, replaces LaTA's entry on
+Gradescope, and re-sends the report on the next release if they had already received one.
+
 Students graded before the watcher started (by plain `grade.py`) are recognised from
 their reports and never graded twice. Their grades are entered on Gradescope like
 anyone's, and they are included when you `send`, but never emailed automatically.
