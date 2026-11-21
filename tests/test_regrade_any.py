@@ -57,4 +57,10 @@ r, text = say("regrade nobody")
 check(r is False and "No student matching" in text, "unknown name: says so")
 r, text = say("regrade lee"); r2, text2 = say("")
 check("2) HW4" in text and r2 is False and "cancelled" in text2, "Enter at the question cancels")
+
+# --keep reuses every finished problem: the report is rebuilt, the model is not asked again
+w.run_pass()                                    # finish the HW4 regrade queued above
+r, text = say("regrade jane hw4 --keep")
+check(r is True and "same item scores" in text, "`--keep`: only the report is rebuilt")
+check(state("HW4")["1"]["regrade"]["fresh"] is False, "queued without a fresh regrade")
 fx.done()

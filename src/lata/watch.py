@@ -484,7 +484,7 @@ class Watcher:
               f"then they are released with everyone else.")
         return True
 
-    def regrade(self, query: str, fresh: bool = False) -> bool:
+    def regrade(self, query: str, fresh: bool = False, keep: bool = False) -> bool:
         """Grade a student again -- held or not -- on the check that follows immediately.
 
         The student is looked up by name across every watched assignment ("regrade John
@@ -505,7 +505,7 @@ class Watcher:
                   + (assignment.name if assignment else "any watched assignment") + ".")
             return False
         if len(found) == 1:
-            return self.queue_regrade(*found[0], fresh=fresh)
+            return self.queue_regrade(*found[0], fresh=fresh, keep=keep)
         print(f"   {query!r} matches more than one -- which?")
         for i, (a, _, st) in enumerate(found, 1):
             print(f"      {i}) {a.name}: {st.get('name')} ({self.describe_state(st)})")
@@ -514,7 +514,7 @@ class Watcher:
         def choose(line: str) -> bool:
             line = line.strip()
             if line.isdigit() and 1 <= int(line) <= len(found):
-                return self.queue_regrade(*found[int(line) - 1], fresh=fresh)
+                return self.queue_regrade(*found[int(line) - 1], fresh=fresh, keep=keep)
             print("   Regrade cancelled.")
             return False
         self.pending = choose
@@ -532,7 +532,7 @@ class Watcher:
             return "graded, feedback not sent yet"
         return "not graded yet"
 
-    def queue_regrade(self, a: Assignment, key: str, st: dict, fresh: bool = False) -> bool:
+    def queue_regrade(self, a: Assignment, key: str, st: dict, fresh: bool = False, keep: bool = False) -> bool:
         if not st.get("graded") and not st.get("held"):
             print(f"   {a.name}: {st.get('name')} is not graded yet; they will be graded as soon as their "
                   f"submission is complete and due.")
@@ -541,7 +541,9 @@ class Watcher:
         # Reusing finished problems only helps when some failed; otherwise it would rebuild
         # the same report, so anything else is regraded from scratch
         failed = any("grading failed" in h or "no report" in h for h in held)
-        fresh = fresh or not failed
+        # --keep: reuse every problem graded before and only rebuild the report (e.g. to
+        # apply a scoring rule that changed); otherwise reuse only when some failed
+        fresh = fresh or (not failed and not keep)
         st["regrade"] = {"at": iso(utcnow()), "fresh": fresh, "was_held": held or None}
         for k in ("held", "graded", "attempts"):
             st.pop(k, None)
@@ -553,7 +555,9 @@ class Watcher:
             note = (f" They already received feedback ({st['previous_feedback_at']}); the new report is sent "
                     f"again when released.")
         self.ledger(a).save()
-        what = "every problem afresh" if fresh else "the problems that did not grade (finished ones are reused)"
+        what = ("every problem afresh" if fresh else
+                "with the same item scores (finished problems reused; only the report is rebuilt)" if keep and not failed else
+                "the problems that did not grade (finished ones are reused)")
         print(f"   🔁 {a.name}: {st.get('name')} will be regraded now -- {what}, from their latest "
               f"submission. The new report replaces the old one and goes through as usual.{note}")
         return True
@@ -918,7 +922,7 @@ class Console:
     """Reads commands typed into the running watcher, without stopping its checks."""
 
     HELP = ("   Commands: send [assignment] [--force] | held | approve <student> [assignment] |\n"
-            "             regrade <student> [assignment] [--fresh] | status | check (check now) | help\n"
+            "             regrade <student> [assignment] [--fresh | --keep] | status | check (check now) | help\n"
             "   (Ctrl-C stops watching)")
 
     def __init__(self):
@@ -956,12 +960,12 @@ def handle_command(watcher: Watcher, line: str) -> bool:
     elif cmd == "held":
         watcher.list_held()
     elif cmd == "regrade":
-        fresh = "--fresh" in args
-        words = [x for x in args if x != "--fresh"]
+        fresh, keep = "--fresh" in args, "--keep" in args
+        words = [x for x in args if x not in ("--fresh", "--keep")]
         if not words:
-            print("   regrade <student name> [assignment] [--fresh] -- `held` lists held reports")
+            print("   regrade <student name> [assignment] [--fresh | --keep]")
             return False
-        return watcher.regrade(" ".join(words), fresh=fresh)
+        return watcher.regrade(" ".join(words), fresh=fresh, keep=keep)
     elif cmd == "approve":
         if not args:
             print("   approve <student name> [assignment] -- `held` lists held reports")

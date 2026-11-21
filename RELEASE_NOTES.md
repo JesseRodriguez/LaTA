@@ -1,5 +1,17 @@
 # Release Notes
 
+## v2.0.6
+
+- **Fixed:** in corrections, sections that scored 0 on the original submission now really
+  cannot recover points. The report listed them as "no recovery", but the totals -- and so
+  the final score and the grade the watcher entered on Gradescope -- still counted whatever
+  the corrections earned there. Those items are now set to 0 before anything is totalled,
+  with a note on each saying why. Corrections graded before this release may have been
+  entered too high: `regrade <student> --keep` rebuilds a report with the same item scores
+  and the rule applied, corrects LaTA's Gradescope entry, and re-sends the report.
+- **New:** `regrade ... --keep` reuses every problem graded before and only rebuilds the
+  report.
+
 ## v2.0.5
 
 - **New:** `regrade <student>` works for any graded student, not only held ones, and finds

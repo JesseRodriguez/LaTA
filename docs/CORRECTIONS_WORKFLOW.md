@@ -314,7 +314,11 @@ PDF displays a prominent red box listing the zero-scored items with a message
 explaining that these items cannot recover points.
 
 Students still receive feedback on their corrections to these items, but the
-score remains 0.
+score remains 0: before any totals are computed, every item in a zero-scored section is
+set to 0 (its audit note records how many points the corrections would have earned, and
+its hint tells the student why). The report's totals, the late penalty, the final score in
+`grading_metadata.yaml` and the grade the watcher enters on Gradescope all exclude them.
+(Before v2.0.6 the box was shown but the points were still counted.)
 
 ---
 

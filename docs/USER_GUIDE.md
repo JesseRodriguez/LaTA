@@ -362,8 +362,9 @@ through the submissions after feedback goes out.
   type `regrade John Smith` in the watcher. It finds the student in your watched
   assignments -- if more than one, it lists them and you type the number, or name the
   assignment (`regrade John Smith ME461_HW3`). Every problem is regraded (a held student
-  whose grading failed reuses the problems that worked; `--fresh` forces all), from their
-  latest submission, and the new report replaces the old. Its score replaces LaTA's entry
+  whose grading failed reuses the problems that worked; `--fresh` forces all; `--keep`
+  reuses every graded problem and only rebuilds the report, e.g. after a scoring fix), from
+  their latest submission, and the new report replaces the old. Its score replaces LaTA's entry
   on Gradescope (a grade changed by hand there is reported, not overwritten), and if they
   had already received feedback, the new report is sent again when released.
 
@@ -399,7 +400,7 @@ through the submissions after feedback goes out.
 
 Typed into the running watcher: `send [ASSIGNMENT] [--force]`, `held` (list held reports),
 `approve <STUDENT> [ASSIGNMENT]` (release a held report after review), `regrade <STUDENT>
-[ASSIGNMENT] [--fresh]` (grade any student again -- looked up across the watched
+[ASSIGNMENT] [--fresh | --keep]` (grade any student again -- looked up across the watched
 assignments; if several match you pick one), `status`, `check` (check for submissions
 now), `help`.
 

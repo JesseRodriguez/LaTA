@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import yaml
+from typing import Optional
 from pathlib import Path
 import jinja2
 from openai import OpenAI
@@ -297,6 +298,16 @@ class LatexReporter:
             self._save_grading_metadata()
             return f"_v{new_version}"
 
+    @staticmethod
+    def grade_item_id(grade_item: str) -> Optional[str]:
+        """The identifier a summary-table row is recorded under: "Problem 1 (a)" -> "1a",
+        "Problem 3" -> "3"; None for anything else."""
+        import re
+        match = re.match(r'Problem\s+(\d+)\s*(?:\(([a-z])\))?', grade_item or "", re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1) + (match.group(2) or "")
+
     def _identify_zero_scored_items(self, grade_result) -> list:
         """
         Identify grade items/sections that scored 0 points in the grading summary table.
@@ -327,23 +338,13 @@ class LatexReporter:
                 grade_item_scores[grade_item]['score'] += item.score
                 grade_item_scores[grade_item]['max'] += item.max_score
 
-        # Check each grade item - if total score is 0, extract identifier
-        import re
+        # Check each grade item - if total score is 0, record its identifier
+        # ("Problem 1 (a)" -> "1a", "Problem 3" -> "3")
         for grade_item, data in grade_item_scores.items():
             if data['max'] > 0 and data['score'] == 0:
-                # Extract identifier from grade item title
-                # "Problem 1 (a)" -> "1a"
-                # "Problem 2 (b)" -> "2b"
-                # "Problem 3" -> "3"
-                match = re.match(r'Problem\s+(\d+)\s*(?:\(([a-z])\))?', grade_item, re.IGNORECASE)
-                if match:
-                    problem_num = match.group(1)
-                    criterion_letter = match.group(2)  # May be None
-
-                    if criterion_letter:
-                        zero_items.append(f"{problem_num}{criterion_letter}")
-                    else:
-                        zero_items.append(problem_num)
+                ident = self.grade_item_id(grade_item)
+                if ident:
+                    zero_items.append(ident)
 
         return zero_items
 
@@ -826,6 +827,26 @@ class LatexReporter:
                 safe_name = grade_result.student_name.replace(" ", "_").replace("(", "").replace(")", "") if grade_result.student_name else grade_result.student_id.replace(" ", "_").replace("(", "").replace(")", "")
                 student_orig = self.original_metadata.get(safe_name, {})
                 orig_extra_credit = student_orig.get('extra_credit_earned', {})
+
+                # Sections that scored 0 on the original submission cannot recover points.
+                # This used to be only announced on the report while the totals (and so the
+                # grade entered on Gradescope) still counted whatever the corrections earned.
+                zero_ids = set(student_orig.get('zero_scored_items') or [])
+                if zero_ids:
+                    removed = 0.0
+                    for item in grade_result.items:
+                        if getattr(item, 'is_extra_credit', False) or self.grade_item_id(item.problem_group) not in zero_ids:
+                            continue
+                        if item.score:
+                            removed += item.score
+                            item.audit_reasoning = (f"[Corrections: {item.score:g} pts set to 0 -- this section scored 0 "
+                                                    f"on the original submission] " + item.audit_reasoning)
+                            item.score = 0.0
+                        item.student_hint = ("No points can be recovered here: this section scored 0 on your original "
+                                             "submission. " + item.student_hint)
+                    grade_result.total_score = sum(i.score for i in grade_result.items)
+                    if removed:
+                        print(f"   🚫 Zero-scored sections {', '.join(sorted(zero_ids))}: {removed:g} pts not counted")
 
                 if orig_extra_credit:
                     print(f"   🌟 Restoring original extra credit: {orig_extra_credit}")
